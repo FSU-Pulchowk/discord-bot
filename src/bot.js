@@ -1,10 +1,10 @@
-import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
-import { initializeDatabase, db } from './database.js'; 
+import { initializeDatabase, db } from './database.js';
 import { emailService } from './services/emailService.js';
-import { scrapeLatestNotice } from './services/scraper.js'; 
-import { CommandHandler } from './utils/CommandHandler.js'; 
+import { scrapeLatestNotice } from './services/scraper.js';
+import { CommandHandler } from './utils/CommandHandler.js';
 import { initializeGoogleCalendarClient } from './commands/prefix/holidays.js';
 import * as verifyCmd from './commands/slash/verify.js';
 import * as confirmOtpCmd from './commands/slash/confirmotp.js';
@@ -43,9 +43,12 @@ import { TopVoiceCommand } from './commands/prefix/topVoice.js';
 import { ViewAntiSpamCommand } from './commands/prefix/viewAntiSpam.js';
 import { WarnCommand } from './commands/prefix/warn.js';
 import { GotVerifiedCommand } from './commands/prefix/gotVerified.js';
+import { fromPath } from 'pdf2pic';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+
 import { promises as fsPromises, createWriteStream } from 'fs';
-import path from 'path';     
-import axios from 'axios'; 
+import path from 'path';
+import axios from 'axios';
 
 dotenv.config();
 class PulchowkBot {
@@ -59,17 +62,17 @@ class PulchowkBot {
                 IntentsBitField.Flags.GuildMembers,
                 IntentsBitField.Flags.GuildMessages,
                 IntentsBitField.Flags.MessageContent,
-                IntentsBitField.Flags.GuildVoiceStates, 
-                IntentsBitField.Flags.GuildMessageReactions, 
-                IntentsBitField.Flags.DirectMessages, 
+                IntentsBitField.Flags.GuildVoiceStates,
+                IntentsBitField.Flags.GuildMessageReactions,
+                IntentsBitField.Flags.DirectMessages,
             ],
             partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.GuildMember, Partials.User],
         });
         this.client.db = this.db;
-        this.client.commands = new Collection(); 
-        this.commandHandler = new CommandHandler(this.client, this.PREFIX, this.db); 
-        this.spamMap = new Map(); 
-        this.spamWarnings = new Map(); 
+        this.client.commands = new Collection();
+        this.commandHandler = new CommandHandler(this.client, this.PREFIX, this.db);
+        this.spamMap = new Map();
+        this.spamWarnings = new Map();
         this.voiceStates = new Map();
         this._setupSlashCommands();
         this._setupPrefixCommands();
@@ -167,7 +170,7 @@ class PulchowkBot {
                     this.voiceStates.set(row.user_id, {
                         guildId: row.guild_id,
                         channelId: row.channel_id,
-                        joinTime: row.join_time 
+                        joinTime: row.join_time
                     });
                 });
                 console.log(`Loaded ${rows.length} active voice sessions from database.`);
@@ -368,7 +371,7 @@ class PulchowkBot {
                     if (row) {
                         if (user.id === row.user_id) {
                             await reaction.users.remove(user.id).catch(e => console.error('Error removing self-vote reaction:', e));
-                            return; 
+                            return;
                         }
 
                         let newUpvotes = row.upvotes || 0;
@@ -551,7 +554,7 @@ class PulchowkBot {
                 } else {
                     console.warn(`[Voice] No active session found in DB for ${oldState.member.user.tag} when leaving/moving channel.`);
                 }
-                this.voiceStates.delete(userId); 
+                this.voiceStates.delete(userId);
                 if (newState.channelId) {
                     this.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
                         [userId, guildId, newState.channelId, Date.now()],
@@ -578,7 +581,7 @@ class PulchowkBot {
         this.db.get(`SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold FROM anti_spam_configs WHERE guild_id = ?`, [guildId], async (err, config) => {
             if (err) {
                 console.error('Error fetching anti-spam config:', err.message);
-                return; 
+                return;
             }
 
             const antiSpamConfig = config || {
@@ -636,7 +639,7 @@ class PulchowkBot {
                         }
                     }
                     await message.channel.bulkDelete(userData.count, true).catch(e => console.error('Error bulk deleting messages:', e));
-                    this.spamMap.delete(userId); 
+                    this.spamMap.delete(userId);
                 }
             }
         });
@@ -672,7 +675,7 @@ class PulchowkBot {
         } else {
             console.warn('NOTICE_CHECK_INTERVAL_MS is not set or invalid. Notice scraping disabled.');
         }
-        
+
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
         if (BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID && BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID !== 'YOUR_BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID_HERE') {
             schedule.scheduleJob('0 9 * * *', () => this._announceBirthdays()); // Every day at 9:00 AM
@@ -689,6 +692,21 @@ class PulchowkBot {
         console.log('[Scheduler] Checking for new notices...');
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
         const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
+        const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments'); 
+
+        
+        console.log(`[Debug] Current Working Directory (process.cwd()): ${process.cwd()}`);
+        console.log(`[Debug] Calculated TEMP_ATTACHMENT_DIR: ${TEMP_ATTACHMENT_DIR}`);
+        try {
+            await fsPromises.mkdir(TEMP_ATTACHMENT_DIR, { recursive: true });
+            console.log(`[Debug] Successfully ensured TEMP_ATTACHMENT_DIR exists: ${TEMP_ATTACHMENT_DIR}`);
+        } catch (e) {
+            console.error(`[Debug] Error creating TEMP_ATTACHMENT_DIR (${TEMP_ATTACHMENT_DIR}):`, e);
+            if (adminChannel) await adminChannel.send(`❌ Critical: Could not create temp directory: ${e.message}`).catch(sendErr => console.error("Error sending admin error:", sendErr));
+            return;
+        }
+
+
 
         if (!TARGET_NOTICE_CHANNEL_ID || TARGET_NOTICE_CHANNEL_ID === 'YOUR_NOTICE_CHANNEL_ID_HERE') {
             console.warn('[Scheduler] TARGET_NOTICE_CHANNEL_ID not configured. Skipping notice announcements.');
@@ -718,117 +736,230 @@ class PulchowkBot {
         }
 
         try {
-            const latestNotices = await scrapeLatestNotice();
-            if (!latestNotices || latestNotices.length === 0) {
-                console.log('[Scheduler] No new notices found or scraper returned empty.');
+            let scrapedNotices = await scrapeLatestNotice();
+
+            if (!scrapedNotices || scrapedNotices.length === 0) {
+                console.log('[Scheduler] No notices found or scraper returned empty.');
                 return;
             }
 
-            for (const notice of latestNotices) {
+            let latestDate = null;
+            scrapedNotices.forEach(notice => {
+                const noticeDate = new Date(notice.date);
+                if (isNaN(noticeDate.getTime())) {
+                    console.warn(`[Scheduler] Invalid date format for notice: ${notice.title} - ${notice.date}`);
+                    return;
+                }
+                if (!latestDate || noticeDate > latestDate) {
+                    latestDate = noticeDate;
+                }
+            });
+
+            if (!latestDate) {
+                console.log('[Scheduler] No valid dates found in scraped notices.');
+                return;
+            }
+
+
+            const noticesToAnnounce = scrapedNotices.filter(notice => {
+                const noticeDate = new Date(notice.date);
+                return noticeDate.getFullYear() === latestDate.getFullYear() &&
+                       noticeDate.getMonth() === latestDate.getMonth() &&
+                       noticeDate.getDate() === latestDate.getDate();
+            });
+
+            if (noticesToAnnounce.length === 0) {
+                console.log('[Scheduler] No notices found for the latest date.');
+                return;
+            }
+
+            for (const notice of noticesToAnnounce) {
                 if (!notice || !notice.title || !notice.link) {
                     console.warn('[Scheduler] Scraper returned an invalid notice object:', notice);
-                    continue; 
+                    continue;
                 }
 
-                this.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], async (err, row) => {
-                    if (err) {
-                        console.error('Error checking existing notice:', err.message);
-                        if (adminChannel) await adminChannel.send(`❌ Error checking for existing notice in DB: ${err.message}`).catch(e => console.error("Error sending admin error:", e));
-                        return;
+                const row = await new Promise((resolve, reject) => {
+                    this.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
+                        if (err) reject(err);
+                        else resolve(result);
+                    });
+                });
+
+                if (row.count === 0) {
+                    console.log(`[Scheduler] New notice found from ${notice.source}: ${notice.title}`);
+
+                    const noticeEmbed = new EmbedBuilder()
+                        .setColor('#1E90FF')
+                        .setTitle(`Notice ${notice.id ? notice.id + ': ' : ''}${notice.title}`)
+                        .setURL(notice.link)
+                        .setFooter({ text: `Source: ${notice.source}` })
+                        .setTimestamp(new Date(notice.date));
+
+                    let filesToSend = [];
+                    let tempFilesOnDisk = []; 
+                    let description = `A new notice has been published.`;
+
+                    if (notice.attachments && notice.attachments.length > 0) {
+                        console.log(`[Scheduler] Processing attachments for notice: ${notice.title}`);
+
+                        for (const attachmentUrl of notice.attachments) {
+                            try {
+                                const fileName = path.basename(new URL(attachmentUrl).pathname);
+                                const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
+                                tempFilesOnDisk.push(tempFilePath); 
+
+                                console.log(`[Debug] Attempting to download ${attachmentUrl} to ${tempFilePath}`); 
+                                const response = await axios({
+                                    method: 'GET',
+                                    url: attachmentUrl,
+                                    responseType: 'stream'
+                                });
+
+                                const writer = createWriteStream(tempFilePath);
+                                response.data.pipe(writer);
+
+                                await new Promise((resolve, reject) => {
+                                    writer.on('finish', resolve);
+                                    writer.on('error', reject);
+                                });
+
+                                const MAX_PDF_PAGES_TO_CONVERT = 5; 
+
+
+                                if (fileName.toLowerCase().endsWith('.pdf')) {
+                                    // --- PDF to PNG Conversion ---
+                                    try {
+                                        // --- Step 1: Get PDF page count using pdfjs-dist ---
+                                        let totalPdfPages = 0;
+                                        try {
+                                            const pdfBuffer = await fsPromises.readFile(tempFilePath);
+                                            // pdfjs-dist often prefers Uint8Array
+                                            const uint8Array = new Uint8Array(pdfBuffer);
+
+                                            // Load the PDF document
+                                            const loadingTask = getDocument({ data: uint8Array });
+                                            const pdfDocument = await loadingTask.promise;
+                                            totalPdfPages = pdfDocument.numPages;
+                                            console.log(`[Debug] PDF ${fileName} has ${totalPdfPages} pages using pdfjs-dist.`);
+                                        } catch (pdfjsError) {
+                                            console.warn(`[Warning] Could not get page count for PDF ${fileName} using pdfjs-dist:`, pdfjsError.message);
+                                            totalPdfPages = MAX_PDF_PAGES_TO_CONVERT; // Fallback to max limit if page count cannot be determined
+                                        }
+
+                                        const pdfConvertOptions = {
+                                            density: 150,
+                                            quality: 90,
+                                            width: 1240,
+                                            height: 1754,
+                                            format: "png",
+                                            saveFilename: path.parse(fileName).name,
+                                            savePath: TEMP_ATTACHMENT_DIR
+                                        };
+
+                                        const convert = fromPath(tempFilePath, pdfConvertOptions);
+                                        let pageConvertedCount = 0;
+
+                                        // Loop through pages, respecting both the actual page count and the MAX_PDF_PAGES_TO_CONVERT limit
+                                        const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES_TO_CONVERT);
+
+                                        for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
+                                            try {
+                                                const convertResponse = await convert(pageNum);
+
+                                                if (convertResponse && convertResponse.path) {
+                                                    const pngFilePath = convertResponse.path;
+                                                    const pngFileName = path.basename(pngFilePath);
+                                                    tempFilesOnDisk.push(pngFilePath);
+                                                    filesToSend.push(new AttachmentBuilder(pngFilePath, { name: pngFileName }));
+                                                    console.log(`Converted PDF ${fileName} page ${pageNum} to PNG and prepared for sending.`);
+                                                    pageConvertedCount++;
+                                                } else {
+                                                    console.warn(`No valid response for PDF ${fileName} at page ${pageNum}. Stopping conversion for this PDF.`);
+                                                    break;
+                                                }
+                                            } catch (pageConvertError) {
+                                                console.warn(`Could not convert PDF ${fileName} page ${pageNum}:`, pageConvertError.message);
+                                                if (pageConvertError.message.includes('does not exist') || pageConvertError.message.includes('invalid page number')) {
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        if (pageConvertedCount === 0) {
+                                            console.warn(`No pages converted for PDF ${fileName}. Sending original PDF.`);
+                                            filesToSend.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                        } else if (pageConvertedCount < totalPdfPages) {
+                                            console.log(`\n(Sent ${pageConvertedCount} of ${totalPdfPages} pages from ${fileName} as images.)`);
+                                        } else {
+                                            console.log(`\n(Sent all ${totalPdfPages} pages from ${fileName} as images.)`);
+                                        }
+
+                                    } catch (pdfProcessError) {
+                                        console.error(`Error processing PDF ${fileName}:`, pdfProcessError.message);
+                                        description += `\n\n⚠️ Could not process PDF attachment: ${fileName}`;
+                                        filesToSend.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                    }
+                                } else {
+                                    filesToSend.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                    console.log(`Prepared attachment: ${fileName}`);
+                                }
+                            } catch (downloadError) {
+                                console.error(`Error downloading attachment ${attachmentUrl}:`, downloadError.message);
+                                description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
+                            }
+                        }
                     }
 
-                    if (row.count === 0) {
-                        console.log(`[Scheduler] New notice found from ${notice.source}: ${notice.title}`);
+                    noticeEmbed.setDescription(description);
 
-                        const noticeEmbed = new EmbedBuilder()
-                            .setColor('#1E90FF')
-                            .setTitle(`Notice ${notice.id}: ${notice.title}`)
-                            .setURL(notice.link)
-                            .setFooter({ text: `Source: ${notice.source}` })
-                            .setTimestamp(new Date(notice.date));
-
-                        let filesToSend = [];
-                        let description = `A new notice has been published.`
-
-                        if (notice.attachments && notice.attachments.length > 0 && notice.source === 'Pulchowk Campus') {
-                            console.log(`[Scheduler] Downloading attachments for Pulchowk Campus notice: ${notice.title}`);
-                            const tempDir = path.join(process.cwd(), 'temp_notice_attachments');
-                            await fsPromises.mkdir(tempDir, { recursive: true }).catch(e => console.error('Error creating temp directory:', e));
-
-                            for (const attachmentUrl of notice.attachments) {
-                                try {
-                                    const fileName = path.basename(new URL(attachmentUrl).pathname);
-                                    const filePath = path.join(tempDir, fileName);
-                                    const response = await axios({
-                                        method: 'GET',
-                                        url: attachmentUrl,
-                                        responseType: 'stream'
-                                    });
-
-                                    const writer = createWriteStream(filePath);
-                                    response.data.pipe(writer);
-
-                                    await new Promise((resolve, reject) => {
-                                        writer.on('finish', resolve);
-                                        writer.on('error', reject);
-                                    });
-
-                                    filesToSend.push({ attachment: filePath, name: fileName });
-                                    console.log(`Downloaded attachment: ${fileName}`);
-                                } catch (downloadError) {
-                                    console.error(`Error downloading attachment ${attachmentUrl}:`, downloadError.message);
-                                    description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
-                                }
-                            }
-                        } else if (notice.attachments && notice.attachments.length > 0) {
-                            const attachmentLinks = notice.attachments.map((att, index) => `[File ${index + 1}](${att})`).join('\n');
-                            description += `\n\n**Attachments:**\n${attachmentLinks}`;
-                        }
-                        
-                        noticeEmbed.setDescription(description);
-
-
-                        try {
-                            await noticeChannel.send({ embeds: [noticeEmbed] });
-                            await noticeChannel.send({files: filesToSend});
-                            console.log(`Sent notice and attachments for "${notice.title}" to Discord.`);
-                        } catch (discordSendError) {
-                            console.error(`Error sending notice or files to channel ${TARGET_NOTICE_CHANNEL_ID}:`, discordSendError);
-                            if (adminChannel) await adminChannel.send(`❌ Error sending notice/files for "${notice.title}": ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
-                        } finally {
-
-                            for (const file of filesToSend) {
-                                try {
-                                    await fsPromises.unlink(file.attachment); 
-                                    console.log(`Deleted temporary file: ${file.attachment}`);
-                                } catch (unlinkError) {
-                                    console.warn(`Error deleting temporary file ${file.attachment}:`, unlinkError.message);
-                                }
+                    try {
+                        await noticeChannel.send({ embeds: [noticeEmbed], files: filesToSend });
+                        console.log(`Sent notice and attachments for "${notice.title}" to Discord.`);
+                    } catch (discordSendError) {
+                        console.error(`Error sending notice or files to channel ${TARGET_NOTICE_CHANNEL_ID}:`, discordSendError);
+                        if (adminChannel) await adminChannel.send(`❌ Error sending notice/files for "${notice.title}": ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
+                    } finally {
+                        for (const filePath of tempFilesOnDisk) {
+                            try {
+                                await fsPromises.unlink(filePath);
+                                console.log(`Cleaned up temporary file: ${filePath}`);
+                            } catch (unlinkError) {
+                                console.warn(`Error cleaning up temporary file ${filePath}:`, unlinkError.message);
                             }
                         }
+                    }
 
-
+                    await new Promise((resolve, reject) => {
                         this.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
                             [notice.title, notice.link, notice.date, Date.now()],
                             (insertErr) => {
                                 if (insertErr) {
-                                    console.error('Error saving new notice to DB:', insertErr.message);
-                                    if (adminChannel) adminChannel.send(`❌ Error saving new notice to DB: ${insertErr.message}`).catch(e => console.error("Error sending admin error:", e));
+                                    reject(insertErr);
                                 } else {
                                     console.log(`[Scheduler] Announced and saved new notice: ${notice.title}`);
+                                    resolve();
                                 }
                             }
                         );
-                    } else {
-                        console.log(`[Scheduler] Notice from ${notice.source} ("${notice.title}") already announced. Skipping.`);
-                    }
-                });
-            }
+                    }).catch(insertErr => {
+                        console.error('Error saving new notice to DB:', insertErr.message);
+                        if (adminChannel) adminChannel.send(`❌ Error saving new notice to DB: ${insertErr.message}`).catch(e => console.error("Error sending admin error:", e));
+                    });
+
+                } else {
+                    console.log(`[Scheduler] Notice from ${notice.source} ("${notice.title}") already announced. Skipping.`);
+                }
+            } 
+
         } catch (error) {
             console.error('[Scheduler] Error during notice scraping or announcement:', error.message);
             if (adminChannel) {
                 await adminChannel.send(`❌ Notice scraping failed: ${error.message}`).catch(e => console.error("Error sending admin error:", e));
             }
+        }
+        finally {
+            await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(e => console.error('Error deleting temp directory after all notices processed:', e));
         }
     }
 
@@ -875,7 +1006,7 @@ class PulchowkBot {
 
                         if (rows.length > 0) {
                             const birthdayUsers = [];
-                            let firstBirthdayUserAvatarUrl = null; 
+                            let firstBirthdayUserAvatarUrl = null;
                             for (const row of rows) {
                                 try {
                                     const member = await guild.members.fetch(row.user_id);
@@ -889,25 +1020,25 @@ class PulchowkBot {
                                         firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 }); // Get dynamic URL, specify size
                                     }
                                 } catch (fetchErr) {
-                                    console.warn(`Could not fetch birthday user ${row.user_id} in guild ${guild.id}:`, fetchErr.message);
+                                    console.warn(`Could not fetch birthday user ${row.user.id} in guild ${guild.id}:`, fetchErr.message);
                                     birthdayUsers.push(`• Unknown User (ID: ${row.user_id})`);
                                 }
                             }
-                            
+
 
                             const authorName = `Free Students' Union, Pulchowk Campus - 2081`;
                             const authorIconUrl = "https://fsu.abhishekkharel.com.np/images/fsulogo.png";
                             const authorWebsiteUrl = "https://www.facebook.com/fsupulchowk";
                             const birthdayEmbed = new EmbedBuilder()
-                                .setColor('#FFD700') 
-                                .setAuthor({ 
-                                    name: authorName, 
-                                    iconURL: authorIconUrl, 
-                                    url: authorWebsiteUrl 
+                                .setColor('#FFD700')
+                                .setAuthor({
+                                    name: authorName,
+                                    iconURL: authorIconUrl,
+                                    url: authorWebsiteUrl
                                 })
                                 .setTitle('🎂 Happy Birthday!')
                                 .setDescription(`🎉 Wishing a very happy birthday to our amazing community members:\n\n${birthdayUsers.join('\n')}\n\nMay you have a fantastic day filled with joy and celebration!`)
-                                .setImage('https://codaio.imgix.net/docs/Y_HFctSU9K/blobs/bl-4kLxBlt-8t/66dbaff27d8df6da40fc20009f59a885dca2e859e880d992e28c3096d08bd205041c9ea43d0ca891055d56e79864748a9564d1be896d57cc93bf6c57e6b25e879d80a6d5058a91ef3572aff7c0a3b9efb24f7f0d1daa0d170368b9686d674c81650fa247?auto=format%2Ccompress&fit=crop&w=1920&ar=4%3A1&crop=focalpoint&fp-x=0.5&fp-y=0.5&fp-z=1') 
+                                .setImage('https://codaio.imgix.net/docs/Y_HFctSU9K/blobs/bl-4kLxBlt-8t/66dbaff27d8df6da40fc20009f59a885dca2e859e880d992e28c3096d08bd205041c9ea43d0ca891055d56e79864748a9564d1be896d57cc93bf6c57e6b25e879d80a6d5058a91ef3572aff7c0a3b9efb24f7f0d1daa0d170368b9686d674c81650fa247?auto=format%2Ccompress&fit=crop&w=1920&ar=4%3A1&crop=focalpoint&fp-x=0.5&fp-y=0.5&fp-z=1')
                                 .setTimestamp();
                             if (firstBirthdayUserAvatarUrl) {
                                 birthdayEmbed.setThumbnail(firstBirthdayUserAvatarUrl);
@@ -939,7 +1070,7 @@ async function main() {
         bot.start();
     } catch (error) {
         console.error('Failed to start bot:', error);
-        process.exit(1); 
+        process.exit(1);
     }
 }
 
