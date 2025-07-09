@@ -1,0 +1,9 @@
+.env
+token.json
+credentials.json
+.gitignore
+bot.db
+temp_notice_attachments/
+src/service_account_key.json
+labels.json
+node_modules/
