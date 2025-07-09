@@ -21,6 +21,8 @@
     "googleapis": "^150.0.1",
     "node-schedule": "^2.1.1",
     "nodemailer": "^7.0.5",
+    "pdf2pic": "^3.2.0",
+    "pdfjs-dist": "^5.3.93",
     "sqlite3": "^5.1.7"
   }
 }
