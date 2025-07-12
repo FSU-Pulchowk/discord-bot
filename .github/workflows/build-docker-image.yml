@@ -31,5 +31,3 @@ jobs:
           tags: | # Define image tags
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest # latest tag
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} # Tag with commit SHA for unique versions
-          cache-from: type=gha # Cache layers to speed up builds
-          cache-to: type=gha,mode=max
