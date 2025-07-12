@@ -260,9 +260,14 @@ class PulchowkBot {
      */
     async _onMessageCreate(message) {
         if (message.author.bot) return;
+        if (!message.guild) {
+            console.log(`Received DM from ${message.author.tag}: ${message.content}`);
+            await this.commandHandler.handleMessage(message);
+            return;
+        }
         await this._handleAntiSpam(message);
-        await this.commandHandler.handleMessage(message);
         await this._updateUserMessageStats(message);
+        await this.commandHandler.handleMessage(message);
     }
 
     /**
@@ -576,8 +581,14 @@ class PulchowkBot {
      * @param {import('discord.js').Message} message
      */
     async _handleAntiSpam(message) {
+        if (!message.guild) {
+            return;
+        }
+
+        // Now it's safe to access message.guild.id
         const userId = message.author.id;
-        const guildId = message.guild.id;
+        const guildId = message.guild.id; // This line should now be safe
+
         this.db.get(`SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold FROM anti_spam_configs WHERE guild_id = ?`, [guildId], async (err, config) => {
             if (err) {
                 console.error('Error fetching anti-spam config:', err.message);
@@ -615,7 +626,9 @@ class PulchowkBot {
                     const currentWarnings = this.spamWarnings.get(userId);
 
                     if (currentWarnings >= ban_threshold) {
-                        if (message.member.bannable) {
+                        // Also add a check for message.member here, as message.member might also be null in rare cases
+                        // though less common for guild messages, it's safer.
+                        if (message.member && message.member.bannable) {
                             await message.member.ban({ reason: `Automated anti-spam: ${currentWarnings} spam warnings.` }).catch(e => console.error('Error banning:', e));
                             message.channel.send(`🚨 ${message.author.tag} has been banned for repeated spamming. (${currentWarnings} warnings)`).catch(e => console.error("Error sending ban message:", e));
                             this.spamWarnings.delete(userId);
@@ -623,7 +636,7 @@ class PulchowkBot {
                             message.channel.send(`🚨 Anti-spam: ${message.author.tag} is spamming but I cannot ban them.`).catch(e => console.error("Error sending ban failure message:", e));
                         }
                     } else if (currentWarnings >= kick_threshold) {
-                        if (message.member.kickable) {
+                        if (message.member && message.member.kickable) {
                             await message.member.kick(`Automated anti-spam: ${currentWarnings} spam warnings.`).catch(e => console.error('Error kicking:', e));
                             message.channel.send(`⚠️ ${message.author.tag} has been kicked for excessive spamming. (${currentWarnings} warnings)`).catch(e => console.error("Error sending kick message:", e));
                         } else {
@@ -631,7 +644,7 @@ class PulchowkBot {
                         }
                     } else {
                         const muteDurationMs = mute_duration_seconds * 1000;
-                        if (message.member.moderatable && !message.member.isCommunicationDisabled()) {
+                        if (message.member && message.member.moderatable && !message.member.isCommunicationDisabled()) {
                             await message.member.timeout(muteDurationMs, 'Automated anti-spam mute').catch(e => console.error('Error timing out:', e));
                             message.channel.send(`🔇 ${message.author.tag} has been timed out for ${mute_duration_seconds} seconds due to spamming. (Warning ${currentWarnings}/${kick_threshold})`).catch(e => console.error("Error sending mute message:", e));
                         } else {
