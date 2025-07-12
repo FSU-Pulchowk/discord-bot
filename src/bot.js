@@ -13,8 +13,22 @@ import path from 'path';
 import axios from 'axios';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
-dotenv.config();
-
+async function writeServiceAccountKey() {
+    const b64 = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_B64;
+    if (!b64) {
+        console.warn('No GOOGLE_SERVICE_ACCOUNT_KEY_B64 env var found');
+        return;
+    }
+    try {
+        const decoded = Buffer.from(b64, 'base64').toString('utf-8');
+        await fsPromises.writeFile('./service_account_key.json', decoded);
+        console.log('Service account key saved.');
+    } catch (error) {
+        console.error('Failed to write service account key:', error);
+    }
+}
+dotenv.config()
+await writeServiceAccountKey();
 class PulchowkBot {
     constructor(token, dbInstance) {
         this.token = token;
