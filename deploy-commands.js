@@ -1,13 +1,13 @@
 import { REST, Routes } from 'discord.js';
 import dotenv from 'dotenv';
-import * as verifyCmd from './src/commands/slash/verify.js';
-import * as confirmOtpCmd from './src/commands/slash/confirmotp.js';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promises as fsPromises } from 'fs';
 
 dotenv.config(); 
 
 const { BOT_TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
-// Ensure critical environment variables are set
 if (!BOT_TOKEN) {
     console.error("❌ BOT_TOKEN is not set in .env. Commands cannot be deployed.");
     process.exit(1);
@@ -17,29 +17,47 @@ if (!CLIENT_ID) {
     process.exit(1);
 }
 
-const commands = [
-    verifyCmd.data.toJSON(),
-    confirmOtpCmd.data.toJSON(),
-];
+const commands = [];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const commandsPath = path.join(__dirname, 'src', 'commands', 'slash');
+
+async function loadCommands() {
+    const commandFiles = await fsPromises.readdir(commandsPath).catch(e => {
+        console.error(`Error reading commands directory ${commandsPath}:`, e);
+        return [];
+    });
+
+    for (const file of commandFiles) {
+        if (!file.endsWith('.js')) continue;
+        const filePath = path.join(commandsPath, file);
+        try {
+            const command = await import(filePath);
+            if ('data' in command && 'execute' in command) {
+                commands.push(command.data.toJSON());
+            } else {
+                console.warn(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+            }
+        } catch (error) {
+            console.error(`Error loading command from ${filePath}:`, error);
+        }
+    }
+}
 
 const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
 
-/**
- * Deploys slash commands to a specific guild (server).
- * This is faster for testing as changes propagate quickly.
- */
 async function deployGuildCommands() {
     if (!GUILD_ID) {
         console.error("❌ GUILD_ID is not set in .env. Guild commands cannot be deployed.");
         process.exit(1);
     }
+    await loadCommands(); 
     try {
         console.log(`Started refreshing ${commands.length} application (/) commands for guild ${GUILD_ID}.`);
 
-        // The put method is used to fully refresh all commands in the guild with the current set
         const data = await rest.put(
-        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-        { body: commands },
+            Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+            { body: commands },
         );
 
         console.log(`Successfully reloaded ${data.length} application (/) commands for guild ${GUILD_ID}.`);
@@ -53,19 +71,14 @@ async function deployGuildCommands() {
     }
 }
 
-/**
- * Deploys slash commands globally.
- * This can take up to an hour for changes to propagate across all guilds.
- * Use for production deployment.
- */
 async function deployGlobalCommands() {
+    await loadCommands();
     try {
         console.log(`Started refreshing ${commands.length} application (/) commands globally.`);
 
-        // The put method is used to fully refresh all commands globally with the current set
         const data = await rest.put(
-        Routes.applicationCommands(CLIENT_ID),
-        { body: commands },
+            Routes.applicationCommands(CLIENT_ID),
+            { body: commands },
         );
 
         console.log(`Successfully reloaded ${data.length} application (/) commands globally.`);
@@ -75,7 +88,6 @@ async function deployGlobalCommands() {
             console.log("⚠️ No slash commands were deployed globally (commands array is empty).");
         }
     } catch (error) {
-        // And of course, make sure you catch and log any errors!
         console.error('Error deploying global commands:', error);
     }
 }

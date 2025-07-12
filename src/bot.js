@@ -1,60 +1,23 @@
-import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
+import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, Events } from 'discord.js';
+import { REST } from '@discordjs/rest';
+import { Routes } from 'discord-api-types/v9'; // Or v10, depending on your discord.js version
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
 import { initializeDatabase, db } from './database.js';
 import { emailService } from './services/emailService.js';
 import { scrapeLatestNotice } from './services/scraper.js';
-import { CommandHandler } from './utils/CommandHandler.js';
-import { initializeGoogleCalendarClient } from './commands/prefix/holidays.js';
-import * as verifyCmd from './commands/slash/verify.js';
-import * as confirmOtpCmd from './commands/slash/confirmotp.js';
-import { AddFaqCommand } from './commands/prefix/addFaq.js';
-import { AddTaskCommand } from './commands/prefix/addTask.js';
-import { AllRolesCommand } from './commands/prefix/allRoles.js';
-import { ApproveSuggestionCommand } from './commands/prefix/approveSuggestion.js';
-import { AssignRoleCommand } from './commands/prefix/assignRole.js';
-import { BanCommand } from './commands/prefix/ban.js';
-import { CompleteTaskCommand } from './commands/prefix/completeTask.js';
-import { DenySuggestionCommand } from './commands/prefix/denySuggestion.js';
-import { GetFaqCommand } from './commands/prefix/getFaq.js';
-import { HelpCommand } from './commands/prefix/help.js';
-import { HolidaysCommand } from './commands/prefix/holidays.js';
-import { KickCommand } from './commands/prefix/kick.js';
-import { LinksCommand } from './commands/prefix/links.js';
-import { ListSuggestionsCommand } from './commands/prefix/listSuggestions.js';
-import { ListTasksCommand } from './commands/prefix/listTasks.js';
-import { MyStatsCommand } from './commands/prefix/myStats.js';
-import { NewsCommand } from './commands/prefix/news.js';
-import { NukeCommand } from './commands/prefix/nuke.js';
-import { RemoveBirthdayCommand } from './commands/prefix/removeBirthday.js';
-import { RemoveFaqCommand } from './commands/prefix/removeFaq.js';
-import { RemoveReactionRoleCommand } from './commands/prefix/removeReactionRole.js';
-import { RemoveRoleCommand } from './commands/prefix/removeRole.js';
-import { RolesCommand } from './commands/prefix/roles.js';
-import { SetAntiSpamCommand } from './commands/prefix/setAntiSpam.js';
-import { SetBirthdayCommand } from './commands/prefix/setBirthday.js';
-import { SetReactionRoleCommand } from './commands/prefix/setReactionRole.js';
-import { SetupFSUCommand } from './commands/prefix/setupFSU.js';
-import { SetWelcomeCommand } from './commands/prefix/setWelcome.js';
-import { SuggestCommand } from './commands/prefix/suggest.js';
-import { TimeoutCommand } from './commands/prefix/timeout.js';
-import { TopChattersCommand } from './commands/prefix/topChatters.js';
-import { TopVoiceCommand } from './commands/prefix/topVoice.js';
-import { ViewAntiSpamCommand } from './commands/prefix/viewAntiSpam.js';
-import { WarnCommand } from './commands/prefix/warn.js';
-import { GotVerifiedCommand } from './commands/prefix/gotVerified.js';
-import { fromPath } from 'pdf2pic';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
 
 import { promises as fsPromises, createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 dotenv.config();
+
 class PulchowkBot {
-    constructor(token, prefix, dbInstance) {
+    constructor(token, dbInstance) {
         this.token = token;
-        this.PREFIX = prefix;
         this.db = dbInstance;
         this.client = new Client({
             intents: [
@@ -70,95 +33,70 @@ class PulchowkBot {
         });
         this.client.db = this.db;
         this.client.commands = new Collection();
-        this.commandHandler = new CommandHandler(this.client, this.PREFIX, this.db);
         this.spamMap = new Map();
         this.spamWarnings = new Map();
         this.voiceStates = new Map();
-        this._setupSlashCommands();
-        this._setupPrefixCommands();
+
         this._setupEventListeners();
     }
 
-    /**
-     * Registers all slash commands with the client.
-     * These commands are typically deployed globally or per-guild using deploy-commands.js.
-     */
-    _setupSlashCommands() {
-        this.client.commands.set(verifyCmd.data.name, verifyCmd);
-        this.client.commands.set(confirmOtpCmd.data.name, confirmOtpCmd);
-    }
-
-    /**
-     * Registers all prefix commands with the CommandHandler.
-     */
-    _setupPrefixCommands() {
-        this.commandHandler.registerCommands([
-            AddFaqCommand,
-            AddTaskCommand,
-            AllRolesCommand,
-            ApproveSuggestionCommand,
-            AssignRoleCommand,
-            BanCommand,
-            CompleteTaskCommand,
-            DenySuggestionCommand,
-            GetFaqCommand,
-            HelpCommand,
-            HolidaysCommand,
-            KickCommand,
-            LinksCommand,
-            ListSuggestionsCommand,
-            ListTasksCommand,
-            MyStatsCommand,
-            NewsCommand,
-            NukeCommand,
-            RemoveBirthdayCommand,
-            RemoveFaqCommand,
-            RemoveReactionRoleCommand,
-            RemoveRoleCommand,
-            RolesCommand,
-            SetAntiSpamCommand,
-            SetBirthdayCommand,
-            SetReactionRoleCommand,
-            SetupFSUCommand,
-            SetWelcomeCommand,
-            SuggestCommand,
-            TimeoutCommand,
-            TopChattersCommand,
-            TopVoiceCommand,
-            ViewAntiSpamCommand,
-            WarnCommand,
-            GotVerifiedCommand,
-        ]);
-    }
-
-    /**
-     * Sets up all Discord event listeners.
-     */
-    _setupEventListeners() {
+    async _setupEventListeners() {
         this.client.once('ready', () => this._onReady());
-        this.client.on('interactionCreate', (interaction) => this._onInteractionCreate(interaction));
-        this.client.on('messageCreate', (message) => this._onMessageCreate(message));
+        this.client.on(Events.InteractionCreate, (interaction) => this._onInteractionCreate(interaction));
+        this.client.on('messageCreate', (message) => this._onMessageCreate(message)); 
         this.client.on('guildMemberAdd', (member) => this._onGuildMemberAdd(member));
         this.client.on('messageReactionAdd', (reaction, user) => this._onMessageReactionAdd(reaction, user));
         this.client.on('messageReactionRemove', (reaction, user) => this._onMessageReactionRemove(reaction, user));
         this.client.on('voiceStateUpdate', (oldState, newState) => this._onVoiceStateUpdate(oldState, newState));
     }
 
-    /**
-     * Handles the 'ready' event when the bot logs in.
-     */
     async _onReady() {
         console.log(`✅ Logged in as ${this.client.user.tag}`);
-        console.log(`Bot prefix: ${this.PREFIX}`);
         await initializeGoogleCalendarClient();
         await this._loadActiveVoiceSessions();
         this._scheduleDailyTasks();
+        await this._loadSlashCommands();
     }
 
-    /**
-     * Loads active voice sessions from the database into the in-memory map.
-     * This ensures persistence across bot restarts.
-     */
+    async _loadSlashCommands() {
+        const slashCommandsPath = path.join(process.cwd(), 'src', 'commands', 'slash');
+        const slashCommandFiles = fsPromises.readdir(slashCommandsPath).catch(e => {
+            console.error(`Error reading slash commands directory ${slashCommandsPath}:`, e);
+            return [];
+        });
+
+        const commandsForDiscordAPI = [];
+
+        for (const file of await slashCommandFiles) {
+            if (!file.endsWith('.js')) continue;
+            const filePath = path.join(slashCommandsPath, file);
+            try {
+                const command = await import(filePath);
+                if ('data' in command && 'execute' in command) {
+                    this.client.commands.set(command.data.name, command);
+                    commandsForDiscordAPI.push(command.data.toJSON());
+                } else {
+                    console.warn(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+                }
+            } catch (error) {
+                console.error(`Error loading slash command from ${filePath}:`, error);
+            }
+        }
+        console.log(`[INFO] Loaded ${this.client.commands.size} slash commands.`);
+        const rest = new REST({ version: '10' }).setToken(this.token);
+
+        try {
+            console.log('Started refreshing application (/) commands.');
+            await rest.put(
+                Routes.applicationCommands(this.client.user.id),
+                { body: commandsForDiscordAPI },
+            );
+            console.log('Successfully reloaded application (/) commands globally.');
+        } catch (error) {
+            console.error('Error refreshing application (/) commands:', error);
+        }
+    }
+
     async _loadActiveVoiceSessions() {
         return new Promise((resolve, reject) => {
             this.db.all(`SELECT user_id, guild_id, channel_id, join_time FROM active_voice_sessions`, [], (err, rows) => {
@@ -179,10 +117,6 @@ class PulchowkBot {
         });
     }
 
-    /**
-     * Handles all incoming interactions (slash commands, buttons, modals, etc.).
-     * @param {import('discord.js').Interaction} interaction
-     */
     async _onInteractionCreate(interaction) {
         if (interaction.isChatInputCommand()) {
             const command = this.client.commands.get(interaction.commandName);
@@ -202,78 +136,89 @@ class PulchowkBot {
                     await interaction.reply({ content: '❌ There was an error while executing this command!', ephemeral: true });
                 }
             }
-        } else if (interaction.isButton()) {
-            if (interaction.customId.startsWith('confirm_otp_button_')) {
-                if (typeof confirmOtpCmd.handleButtonInteraction === 'function') {
-                    try {
-                        await confirmOtpCmd.handleButtonInteraction(interaction);
-                    } catch (error) {
-                        console.error('Error handling confirm OTP button interaction:', error);
-                        if (!interaction.replied && !interaction.deferred) {
-                            await interaction.reply({ content: '❌ An error occurred while processing your OTP confirmation.', ephemeral: true });
+        } 
+        else if (interaction.isButton()) {
+            const customId = interaction.customId;
+            if (customId.startsWith('confirm_nuke_') || customId.startsWith('cancel_nuke_')) {
+                const nukeCommand = this.client.commands.get('nuke');
+                if (nukeCommand && typeof nukeCommand._nukeServerLogic === 'function') { // Assuming _nukeServerLogic is exported
+                    if (customId.startsWith('confirm_nuke_')) {
+                        if (interaction.user.id !== interaction.guild.ownerId) {
+                            return interaction.reply({ content: '❌ Only the server owner can confirm this action.', ephemeral: true });
                         }
+                        await interaction.update({ content: '💣 Beginning server nuke... This may take a moment.', components: [], embeds: [] });
+                        await nukeCommand._nukeServerLogic(interaction);
+                    } else if (customId.startsWith('cancel_nuke_')) {
+                        if (interaction.user.id !== interaction.guild.ownerId) {
+                            return interaction.reply({ content: '❌ Only the server owner can cancel this action.', ephemeral: true });
+                        }
+                        await interaction.update({ content: '❌ Server nuke cancelled.', components: [], embeds: [] });
                     }
                 }
                 return;
             }
-
-            await this.commandHandler.handleButtonInteraction(interaction);
-            if (interaction.customId.startsWith('suggest_vote_')) {
+            else if (customId.startsWith('confirm_setup_fsu_') || customId.startsWith('cancel_setup_fsu_')) {
+                const setupFSUCommand = this.client.commands.get('setupfsu');
+                if (setupFSUCommand && typeof setupFSUCommand._performSetupLogic === 'function') { 
+                    if (customId.startsWith('confirm_setup_fsu_')) {
+                        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                            return interaction.reply({ content: 'You do not have permission to confirm this action.', ephemeral: true });
+                        }
+                        await interaction.update({ content: '🔧 Beginning FSU server setup... This may take a moment.', components: [], embeds: [] });
+                        await setupFSUCommand._performSetupLogic(interaction);
+                    } else if (customId.startsWith('cancel_setup_fsu_')) {
+                        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                            return interaction.reply({ content: 'You do not have permission to cancel this action.', ephemeral: true });
+                        }
+                        await interaction.update({ content: '❌ FSU server setup cancelled.', components: [], embeds: [] });
+                    }
+                }
+                return;
+            }
+            else if (customId.startsWith('gotverified_')) {
+                const gotVerifiedCommand = this.client.commands.get('gotverified');
+                if (gotVerifiedCommand && typeof gotVerifiedCommand.execute === 'function') {
+                    await gotVerifiedCommand.execute(interaction);
+                }
+                return;
+            }
+            else if (customId.startsWith('confirm_otp_button_')) {
+                const confirmOtpCmd = this.client.commands.get('confirmotp');
+                if (confirmOtpCmd && typeof confirmOtpCmd.handleButtonInteraction === 'function') {
+                    await confirmOtpCmd.handleButtonInteraction(interaction);
+                }
+                return;
+            }
+             else if (customId.startsWith('suggest_vote_')) {
                 await this._handleSuggestionVote(interaction);
             }
-        } else if (interaction.isModalSubmit()) {
+        } 
+        else if (interaction.isModalSubmit()) {
             if (interaction.customId === 'verifyModal') {
-                if (typeof verifyCmd.handleModalSubmit === 'function') {
-                    try {
-                        await verifyCmd.handleModalSubmit(interaction);
-                    } catch (error) {
-                        console.error('Error handling verify modal submission:', error);
-                        if (interaction.replied || interaction.deferred) {
-                            await interaction.followUp({ content: '❌ An error occurred while processing your verification details.', ephemeral: true });
-                        } else {
-                            await interaction.reply({ content: '❌ An error occurred while processing your verification details.', ephemeral: true });
-                        }
-                    }
+                const verifyCmd = this.client.commands.get('verify');
+                if (verifyCmd && typeof verifyCmd.handleModalSubmit === 'function') {
+                    await verifyCmd.handleModalSubmit(interaction);
                 }
                 return;
             } else if (interaction.customId === 'confirmOtpModal') {
-                if (typeof confirmOtpCmd.handleModalSubmit === 'function') {
-                    try {
-                        await confirmOtpCmd.handleModalSubmit(interaction);
-                    } catch (error) {
-                        console.error('Error handling confirm OTP modal submission:', error);
-                        if (interaction.replied || interaction.deferred) {
-                            await interaction.followUp({ content: '❌ An error occurred while confirming your OTP.', ephemeral: true });
-                        } else {
-                            await interaction.reply({ content: '❌ An error occurred while confirming your OTP.', ephemeral: true });
-                        }
-                    }
+                const confirmOtpCmd = this.client.commands.get('confirmotp');
+                if (confirmOtpCmd && typeof confirmOtpCmd.handleModalSubmit === 'function') {
+                    await confirmOtpCmd.handleModalSubmit(interaction);
                 }
                 return;
             }
         }
     }
 
-    /**
-     * Handles incoming messages for prefix commands and anti-spam.
-     * @param {import('discord.js').Message} message
-     */
     async _onMessageCreate(message) {
         if (message.author.bot) return;
         if (!message.guild) {
-            console.log(`Received DM from ${message.author.tag}: ${message.content}`);
-            await this.commandHandler.handleMessage(message);
             return;
         }
         await this._handleAntiSpam(message);
         await this._updateUserMessageStats(message);
-        await this.commandHandler.handleMessage(message);
     }
 
-    /**
-     * Handles new guild member additions for welcome messages.
-     * @param {import('discord.js').GuildMember} member
-     */
     async _onGuildMemberAdd(member) {
         this.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
             if (err) {
@@ -308,11 +253,6 @@ class PulchowkBot {
         });
     }
 
-    /**
-     * Handles message reaction additions for reaction roles and suggestion voting.
-     * @param {import('discord.js').MessageReaction} reaction
-     * @param {import('discord.js').User} user
-     */
     async _onMessageReactionAdd(reaction, user) {
         if (reaction.partial) {
             try {
@@ -419,11 +359,6 @@ class PulchowkBot {
         }
     }
 
-    /**
-     * Handles message reaction removals for reaction roles and suggestion voting.
-     * @param {import('discord.js').MessageReaction} reaction
-     * @param {import('discord.js').User} user
-     */
     async _onMessageReactionRemove(reaction, user) {
         if (reaction.partial) {
             try {
@@ -512,11 +447,6 @@ class PulchowkBot {
         }
     }
 
-    /**
-     * Handles voice state updates for tracking voice chat time.
-     * @param {import('discord.js').VoiceState} oldState
-     * @param {import('discord.js').VoiceState} newState
-     */
     async _onVoiceStateUpdate(oldState, newState) {
         const userId = newState.member.id;
         const guildId = newState.guild.id;
@@ -576,18 +506,13 @@ class PulchowkBot {
         }
     }
 
-    /**
-     * Implements the anti-spam logic.
-     * @param {import('discord.js').Message} message
-     */
     async _handleAntiSpam(message) {
         if (!message.guild) {
             return;
         }
 
-        // Now it's safe to access message.guild.id
         const userId = message.author.id;
-        const guildId = message.guild.id; // This line should now be safe
+        const guildId = message.guild.id;
 
         this.db.get(`SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold FROM anti_spam_configs WHERE guild_id = ?`, [guildId], async (err, config) => {
             if (err) {
@@ -626,8 +551,6 @@ class PulchowkBot {
                     const currentWarnings = this.spamWarnings.get(userId);
 
                     if (currentWarnings >= ban_threshold) {
-                        // Also add a check for message.member here, as message.member might also be null in rare cases
-                        // though less common for guild messages, it's safer.
                         if (message.member && message.member.bannable) {
                             await message.member.ban({ reason: `Automated anti-spam: ${currentWarnings} spam warnings.` }).catch(e => console.error('Error banning:', e));
                             message.channel.send(`🚨 ${message.author.tag} has been banned for repeated spamming. (${currentWarnings} warnings)`).catch(e => console.error("Error sending ban message:", e));
@@ -658,10 +581,6 @@ class PulchowkBot {
         });
     }
 
-    /**
-     * Updates user message statistics in the database.
-     * @param {import('discord.js').Message} message
-     */
     async _updateUserMessageStats(message) {
         const userId = message.author.id;
         const guildId = message.guild.id;
@@ -676,11 +595,8 @@ class PulchowkBot {
         );
     }
 
-    /**
-     * Schedules daily tasks for notice scraping and birthday announcements.
-     */
     _scheduleDailyTasks() {
-        const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000'); // Default 30 minutes
+        const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000');
         if (NOTICE_CHECK_INTERVAL_MS > 0) {
             this._checkAndAnnounceNotices();
             setInterval(() => this._checkAndAnnounceNotices(), NOTICE_CHECK_INTERVAL_MS);
@@ -691,16 +607,13 @@ class PulchowkBot {
 
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
         if (BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID && BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID !== 'YOUR_BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID_HERE') {
-            schedule.scheduleJob('0 9 * * *', () => this._announceBirthdays()); // Every day at 9:00 AM
+            schedule.scheduleJob('0 9 * * *', () => this._announceBirthdays());
             console.log('Scheduled daily birthday announcements for 9 AM.');
         } else {
             console.warn('BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID is not set or invalid. Birthday announcements disabled.');
         }
     }
 
-    /**
-     * Checks for new notices and announces them.
-     */
     async _checkAndAnnounceNotices() {
         console.log('[Scheduler] Checking for new notices...');
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
@@ -715,10 +628,17 @@ class PulchowkBot {
             console.log(`[Debug] Successfully ensured TEMP_ATTACHMENT_DIR exists: ${TEMP_ATTACHMENT_DIR}`);
         } catch (e) {
             console.error(`[Debug] Error creating TEMP_ATTACHMENT_DIR (${TEMP_ATTACHMENT_DIR}):`, e);
-            if (adminChannel) await adminChannel.send(`❌ Critical: Could not create temp directory: ${e.message}`).catch(sendErr => console.error("Error sending admin error:", sendErr));
+            let adminChannel;
+            if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
+                try {
+                    adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
+                    if (adminChannel) await adminChannel.send(`❌ Critical: Could not create temp directory: ${e.message}`).catch(sendErr => console.error("Error sending admin error:", sendErr));
+                } catch (fetchErr) {
+                    console.warn(`Could not fetch admin channel for error notification:`, fetchErr.message);
+                }
+            }
             return;
         }
-
 
 
         if (!TARGET_NOTICE_CHANNEL_ID || TARGET_NOTICE_CHANNEL_ID === 'YOUR_NOTICE_CHANNEL_ID_HERE') {
@@ -841,23 +761,19 @@ class PulchowkBot {
 
 
                                 if (fileName.toLowerCase().endsWith('.pdf')) {
-                                    // --- PDF to PNG Conversion ---
                                     try {
-                                        // --- Step 1: Get PDF page count using pdfjs-dist ---
                                         let totalPdfPages = 0;
                                         try {
                                             const pdfBuffer = await fsPromises.readFile(tempFilePath);
-                                            // pdfjs-dist often prefers Uint8Array
                                             const uint8Array = new Uint8Array(pdfBuffer);
 
-                                            // Load the PDF document
                                             const loadingTask = getDocument({ data: uint8Array });
                                             const pdfDocument = await loadingTask.promise;
                                             totalPdfPages = pdfDocument.numPages;
                                             console.log(`[Debug] PDF ${fileName} has ${totalPdfPages} pages using pdfjs-dist.`);
                                         } catch (pdfjsError) {
                                             console.warn(`[Warning] Could not get page count for PDF ${fileName} using pdfjs-dist:`, pdfjsError.message);
-                                            totalPdfPages = MAX_PDF_PAGES_TO_CONVERT; // Fallback to max limit if page count cannot be determined
+                                            totalPdfPages = MAX_PDF_PAGES_TO_CONVERT;
                                         }
 
                                         const pdfConvertOptions = {
@@ -873,7 +789,6 @@ class PulchowkBot {
                                         const convert = fromPath(tempFilePath, pdfConvertOptions);
                                         let pageConvertedCount = 0;
 
-                                        // Loop through pages, respecting both the actual page count and the MAX_PDF_PAGES_TO_CONVERT limit
                                         const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES_TO_CONVERT);
 
                                         for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
@@ -977,9 +892,6 @@ class PulchowkBot {
     }
 
 
-    /**
-     * Announces birthdays for the current day.
-     */
     async _announceBirthdays() {
         console.log('[Scheduler] Checking for birthdays...');
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
@@ -1030,10 +942,10 @@ class PulchowkBot {
                                     }
                                     birthdayUsers.push(`• <@${member.user.id}>${ageString}`);
                                     if (!firstBirthdayUserAvatarUrl) {
-                                        firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 }); // Get dynamic URL, specify size
+                                        firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 });
                                     }
                                 } catch (fetchErr) {
-                                    console.warn(`Could not fetch birthday user ${row.user.id} in guild ${guild.id}:`, fetchErr.message);
+                                    console.warn(`Could not fetch birthday user ${row.user_id} in guild ${guild.id}:`, fetchErr.message);
                                     birthdayUsers.push(`• Unknown User (ID: ${row.user_id})`);
                                 }
                             }
@@ -1068,9 +980,6 @@ class PulchowkBot {
         }
     }
 
-    /**
-     * Starts the bot by logging in.
-     */
     start() {
         this.client.login(this.token);
     }
@@ -1079,7 +988,7 @@ class PulchowkBot {
 async function main() {
     try {
         const database = await initializeDatabase();
-        const bot = new PulchowkBot(process.env.BOT_TOKEN, process.env.BOT_PREFIX, database);
+        const bot = new PulchowkBot(process.env.BOT_TOKEN, database); 
         bot.start();
     } catch (error) {
         console.error('Failed to start bot:', error);
