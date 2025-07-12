@@ -21,7 +21,7 @@ async function writeServiceAccountKey() {
     }
     try {
         const decoded = Buffer.from(b64, 'base64').toString('utf-8');
-        await fsPromises.writeFile('./service_account_key.json', decoded);
+        await fsPromises.writeFile('./src/service_account_key.json', decoded);
         console.log('Service account key saved.');
     } catch (error) {
         console.error('Failed to write service account key:', error);
