@@ -29,5 +29,5 @@ jobs:
           context: . # Build context is the root of the repository
           push: true # Push the image to Docker Hub
           tags: | # Define image tags
-            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest # latest tag
-            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} # Tag with commit SHA for unique versions
+            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
