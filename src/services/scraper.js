@@ -1,35 +1,47 @@
-import { gotScraping } from 'got-scraping';
+import puppeteer from 'puppeteer-core';
+import chromium from 'chrome-aws-lambda';
 import * as cheerio from 'cheerio';
 
 /**
- * Fetches a URL using got-scraping, which automatically handles proxies,
- * retries, and browser-like headers to avoid blocking.
+ * Fetches a URL using a headless browser (Puppeteer), which is robust
+ * against anti-scraping measures like Cloudflare.
  * @param {string} url - The URL to fetch.
  * @returns {Promise<string|null>} - The HTML data from the URL, or null on failure.
  */
-async function fetchWithScraping(url) {
-  console.log(`[Scraper] Fetching ${url}...`);
+async function fetchWithBrowser(url) {
+  console.log(`[Browser] Launching browser to fetch ${url}...`);
+  let browser = null;
   try {
-    // got-scraping automatically uses the PROXY_URL env var if you set it.
-    // It also has smart retry logic and generates browser-like headers.
-    const response = await gotScraping({
-      url: url,
-      // Set a generous timeout and retry limit.
-      timeout: { request: 120000 }, // 2-minute timeout for the request
-      retry: { limit: 5 }, // Retry up to 5 times on failure
-      // Generates realistic browser headers to avoid being detected as a bot.
-      headerGeneratorOptions: {
-        browsers: ['chrome'],
-        devices: ['desktop'],
-        locales: ['en-US', 'en'],
-        operatingSystems: ['windows', 'linux', 'macos'],
-      },
+    const executablePath = await chromium.executablePath;
+    if (!executablePath) {
+        throw new Error('Chromium executable not found. Set up a local path for development if needed.');
+    }
+
+    browser = await puppeteer.launch({
+        args: chromium.args,
+        executablePath: executablePath,
+        headless: chromium.headless,
     });
-    return response.body;
+
+    const page = await browser.newPage();
+
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36');
+
+    console.log(`[Browser] Navigating to ${url}...`);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 });
+
+    console.log(`[Browser] Page loaded successfully. Getting content...`);
+    const content = await page.content();
+    
+    return content;
   } catch (error) {
-    console.error(`[Scraper] Failed to fetch ${url} after all retries. Error: ${error.message}`);
-    // Return null so the calling function can handle the failure gracefully.
+    console.error(`[Browser] Failed to fetch ${url} with headless browser. Error: ${error.message}`);
     return null;
+  } finally {
+    if (browser !== null) {
+      console.log('[Browser] Closing browser.');
+      await browser.close();
+    }
   }
 }
 
@@ -40,7 +52,7 @@ async function fetchWithScraping(url) {
 export async function scrapeIoeExamNotice() {
   const url = 'http://exam.ioe.edu.np/';
   try {
-    const data = await fetchWithScraping(url);
+    const data = await fetchWithBrowser(url);
     if (!data) {
       console.error('[Scraper] Could not retrieve data from IOE Exam Section. Skipping.');
       return [];
@@ -86,7 +98,7 @@ export async function scrapeIoeExamNotice() {
 export async function scrapePcampusNotice() {
   const listUrl = 'https://pcampus.edu.np/category/general-notices/';
   try {
-    const listData = await fetchWithScraping(listUrl);
+    const listData = await fetchWithBrowser(listUrl);
     if (!listData) {
       console.error('[Scraper] Could not retrieve data from Pulchowk Campus notices. Skipping.');
       return null;
@@ -109,7 +121,7 @@ export async function scrapePcampusNotice() {
         return null;
     }
 
-    const pageData = await fetchWithScraping(pageLink);
+    const pageData = await fetchWithBrowser(pageLink);
     if (!pageData) {
         console.error(`[Scraper] Could not retrieve notice detail page ${pageLink}. Skipping.`);
         return null;
