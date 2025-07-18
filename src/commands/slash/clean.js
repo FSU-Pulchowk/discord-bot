@@ -29,7 +29,7 @@ function parseDuration(duration) {
             .setDescription('Channel to clean (default is current)')
             .addChannelTypes(ChannelType.GuildText)
             .setRequired(false))
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages);
+        .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild);
 
     export async function execute(interaction) {
     const durationInput = interaction.options.getString('duration');
