@@ -1,40 +1,23 @@
-import puppeteer from 'puppeteer';
+import axios from 'axios';
 import * as cheerio from 'cheerio';
 
 /**
- * Fetches a URL using Puppeteer headless browser.
+ * Fetches a URL using an HTTP request with axios.
  * @param {string} url - The URL to fetch.
  * @returns {Promise<string|null>} - The HTML content or null on failure.
  */
-async function fetchWithBrowser(url) {
-    console.log(`[Browser] Launching browser to fetch ${url}...`);
-    let browser = null;
+async function fetchWithAxios(url) {
+    console.log(`[HTTP] Fetching ${url} with axios...`);
     try {
-        browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
+            }
         });
-
-        const page = await browser.newPage();
-        await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
-        );
-
-        console.log(`[Browser] Navigating to ${url}...`);
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 });
-
-        console.log(`[Browser] Page loaded, extracting content...`);
-        const content = await page.content();
-
-        return content;
+        return response.data;
     } catch (error) {
-        console.error(`[Browser] Failed to fetch ${url}: ${error.message}`);
+        console.error(`[HTTP] Failed to fetch ${url}: ${error.message}`);
         return null;
-    } finally {
-        if (browser) {
-        console.log('[Browser] Closing browser...');
-        await browser.close();
-        }
     }
 }
 
@@ -44,7 +27,7 @@ async function fetchWithBrowser(url) {
  */
 export async function scrapeIoeExamNotice() {
     const url = 'https://proxy.abhishekkharel.com.np/discord-bot/http/exam.ioe.edu.np';
-    const data = await fetchWithBrowser(url);
+    const data = await fetchWithAxios(url);
     if (!data) {
         console.error('[Scraper] Could not retrieve IOE Exam data.');
         return [];
@@ -61,13 +44,16 @@ export async function scrapeIoeExamNotice() {
         const downloadLinkEl = row.find('td:nth-child(4) a[target="_blank"]');
 
         if (titleEl.length && dateEl.length && viewLinkEl.length && downloadLinkEl.length) {
-        notices.push({
-            title: titleEl.text().trim(),
-            date: dateEl.text().trim(),
-            link: new URL(viewLinkEl.attr('href'), url).href,
-            attachments: [new URL(downloadLinkEl.attr('href'), url).href],
-            source: 'IOE Exam Section',
-        });
+            const noticeLink = url + viewLinkEl.attr('href');
+            const attachmentLink = url + downloadLinkEl.attr('href');
+
+            notices.push({
+                title: titleEl.text().trim(),
+                date: dateEl.text().trim(),
+                link: noticeLink,
+                attachments: [attachmentLink],
+                source: 'IOE Exam Section',
+            });
         }
     });
 
@@ -81,7 +67,7 @@ export async function scrapeIoeExamNotice() {
  */
 export async function scrapePcampusNotice() {
     const listUrl = 'https://pcampus.edu.np/category/general-notices/';
-    const listData = await fetchWithBrowser(listUrl);
+    const listData = await fetchWithAxios(listUrl);
     if (!listData) {
         console.error('[Scraper] Could not retrieve Pulchowk Campus notices.');
         return null;
@@ -105,7 +91,7 @@ export async function scrapePcampusNotice() {
         return null;
     }
 
-    const pageData = await fetchWithBrowser(pageLink);
+    const pageData = await fetchWithAxios(pageLink);
     if (!pageData) {
         console.error(`[Scraper] Could not retrieve Pulchowk notice detail page ${pageLink}.`);
         return null;
@@ -116,7 +102,7 @@ export async function scrapePcampusNotice() {
     $page('.entry-content a').each((_, el) => {
         const href = $page(el).attr('href');
         if (href && href.includes('/wp-content/uploads/')) {
-        attachments.push(new URL(href, pageLink).href);
+            attachments.push(new URL(href, pageLink).href);
         }
     });
 
