@@ -1,61 +1,36 @@
-import axios from 'axios';
+import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
-import { HttpProxyAgent } from 'http-proxy-agent';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-];
-
 
 /**
- * Fetches a URL with a retry mechanism, proxy support, and rotating user-agents.
+ * Fetches a URL using got-scraping, which automatically handles proxies,
+ * retries, and browser-like headers to avoid blocking.
  * @param {string} url - The URL to fetch.
- * @param {number} [retries=3] - The number of times to retry on failure.
- * @param {number} [timeout=60000] - The timeout for each request in milliseconds.
- * @returns {Promise<string>} - The HTML data from the URL.
+ * @returns {Promise<string|null>} - The HTML data from the URL, or null on failure.
  */
-async function fetchWithRetry(url, retries = 3, timeout = 60000) { // Increased default timeout
-  const proxyUrl = process.env.PROXY_URL;
-  const httpAgent = proxyUrl ? new HttpProxyAgent(proxyUrl) : undefined;
-  const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
-
-  const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-
-  const axiosInstance = axios.create({
-    timeout,
-    headers: {
-      'User-Agent': randomUserAgent,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate',
-    },
-    httpAgent,
-    httpsAgent,
-  });
-
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      console.log(`[Attempt ${attempt}] Fetching ${url}` + (proxyUrl ? ' via proxy' : ''));
-      const { data } = await axiosInstance.get(url);
-      return data;
-    } catch (err) {
-      if (err.code === 'ECONNABORTED' && attempt < retries) {
-        const waitTime = 5000 * attempt; 
-        console.warn(`[Retry ${attempt}] Timeout fetching ${url}, retrying in ${waitTime / 1000}s...`);
-        await new Promise((r) => setTimeout(r, waitTime));
-      } else {
-        console.error(`[Scraper] Failed to fetch ${url} on attempt ${attempt}. Error:`, err.message);
-        if (attempt >= retries) {
-          throw err;
-        }
-      }
-    }
+async function fetchWithScraping(url) {
+  console.log(`[Scraper] Fetching ${url}...`);
+  try {
+    // got-scraping automatically uses the PROXY_URL env var if you set it.
+    // It also has smart retry logic and generates browser-like headers.
+    const response = await gotScraping({
+      url: url,
+      // Set a generous timeout and retry limit.
+      timeout: { request: 120000 }, // 2-minute timeout for the request
+      retry: { limit: 5 }, // Retry up to 5 times on failure
+      // Generates realistic browser headers to avoid being detected as a bot.
+      headerGeneratorOptions: {
+        browsers: ['chrome'],
+        devices: ['desktop'],
+        locales: ['en-US', 'en'],
+        operatingSystems: ['windows', 'linux', 'macos'],
+      },
+    });
+    return response.body;
+  } catch (error) {
+    console.error(`[Scraper] Failed to fetch ${url} after all retries. Error: ${error.message}`);
+    // Return null so the calling function can handle the failure gracefully.
+    return null;
   }
-  throw new Error(`Failed to fetch ${url} after ${retries} attempts.`);
 }
 
 /**
@@ -65,7 +40,11 @@ async function fetchWithRetry(url, retries = 3, timeout = 60000) { // Increased 
 export async function scrapeIoeExamNotice() {
   const url = 'http://exam.ioe.edu.np/';
   try {
-    const data = await fetchWithRetry(url);
+    const data = await fetchWithScraping(url);
+    if (!data) {
+      console.error('[Scraper] Could not retrieve data from IOE Exam Section. Skipping.');
+      return [];
+    }
     const $ = cheerio.load(data);
     const notices = [];
 
@@ -92,8 +71,10 @@ export async function scrapeIoeExamNotice() {
       }
     });
 
+    console.log(`[Scraper] Found ${notices.length} notices from IOE Exam Section.`);
     return notices;
   } catch (err) {
+    console.error(`[Scraper] An error occurred during scrapeIoeExamNotice: ${err.message}`);
     return [];
   }
 }
@@ -105,18 +86,35 @@ export async function scrapeIoeExamNotice() {
 export async function scrapePcampusNotice() {
   const listUrl = 'https://pcampus.edu.np/category/general-notices/';
   try {
-    const listData = await fetchWithRetry(listUrl);
+    const listData = await fetchWithScraping(listUrl);
+    if (!listData) {
+      console.error('[Scraper] Could not retrieve data from Pulchowk Campus notices. Skipping.');
+      return null;
+    }
+
     const $list = cheerio.load(listData);
     const latestArticle = $list('article').first();
+    if (latestArticle.length === 0) {
+        console.warn('[Scraper] No articles found on the Pulchowk Campus notice page.');
+        return null;
+    }
 
     const title = latestArticle.find('h2.entry-title a').text().trim();
     const pageLink = latestArticle.find('h2.entry-title a').attr('href');
     const date = latestArticle.find('time.entry-date').attr('datetime');
     const postId = latestArticle.attr('id');
 
-    if (!pageLink) throw new Error('No page link found in latest article.');
+    if (!pageLink) {
+        console.error('[Scraper] Could not find page link in the latest article on Pulchowk Campus.');
+        return null;
+    }
 
-    const pageData = await fetchWithRetry(pageLink);
+    const pageData = await fetchWithScraping(pageLink);
+    if (!pageData) {
+        console.error(`[Scraper] Could not retrieve notice detail page ${pageLink}. Skipping.`);
+        return null;
+    }
+
     const $page = cheerio.load(pageData);
     const attachments = [];
 
@@ -127,6 +125,7 @@ export async function scrapePcampusNotice() {
       }
     });
 
+    console.log(`[Scraper] Found notice "${title}" from Pulchowk Campus.`);
     return {
       id: postId,
       title,
@@ -136,6 +135,7 @@ export async function scrapePcampusNotice() {
       source: 'Pulchowk Campus',
     };
   } catch (err) {
+    console.error(`[Scraper] An error occurred during scrapePcampusNotice: ${err.message}`);
     return null;
   }
 }
@@ -145,9 +145,13 @@ export async function scrapePcampusNotice() {
  * @returns {Promise<Array<object>>} - A combined list of notice objects.
  */
 export async function scrapeLatestNotice() {
+  console.log('[Scraper] Starting scrape for all notice sources...');
   const [ioe, pcampus] = await Promise.all([
     scrapeIoeExamNotice(),
     scrapePcampusNotice(),
   ]);
-  return [...(ioe || []), ...(pcampus ? [pcampus] : [])];
+  
+  const allNotices = [...(ioe || []), ...(pcampus ? [pcampus] : [])];
+  console.log(`[Scraper] Total notices scraped: ${allNotices.length}`);
+  return allNotices;
 }

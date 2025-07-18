@@ -19,6 +19,7 @@
     "discord.js": "^14.21.0",
     "dotenv": "^17.0.1",
     "googleapis": "^150.0.1",
+    "got-scraping": "^4.1.2",
     "http-proxy-agent": "^7.0.2",
     "node-fetch": "^3.3.2",
     "node-schedule": "^2.1.1",
