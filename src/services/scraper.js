@@ -43,7 +43,7 @@ async function fetchWithBrowser(url) {
  * @returns {Promise<Array>} List of notices.
  */
 export async function scrapeIoeExamNotice() {
-    const url = 'http://exam.ioe.edu.np/';
+    const url = 'https://proxy.abhishekkharel.com.np/discord-bot/http/exam.ioe.edu.np';
     const data = await fetchWithBrowser(url);
     if (!data) {
         console.error('[Scraper] Could not retrieve IOE Exam data.');
