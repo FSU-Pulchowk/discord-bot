@@ -634,7 +634,6 @@ class PulchowkBot {
         const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
         const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments'); 
 
-        
         console.log(`[Debug] Current Working Directory (process.cwd()): ${process.cwd()}`);
         console.log(`[Debug] Calculated TEMP_ATTACHMENT_DIR: ${TEMP_ATTACHMENT_DIR}`);
         try {
@@ -653,7 +652,6 @@ class PulchowkBot {
             }
             return;
         }
-
 
         if (!TARGET_NOTICE_CHANNEL_ID || TARGET_NOTICE_CHANNEL_ID === 'YOUR_NOTICE_CHANNEL_ID_HERE') {
             console.warn('[Scheduler] TARGET_NOTICE_CHANNEL_ID not configured. Skipping notice announcements.');
@@ -707,12 +705,11 @@ class PulchowkBot {
                 return;
             }
 
-
             const noticesToAnnounce = scrapedNotices.filter(notice => {
                 const noticeDate = new Date(notice.date);
                 return noticeDate.getFullYear() === latestDate.getFullYear() &&
-                       noticeDate.getMonth() === latestDate.getMonth() &&
-                       noticeDate.getDate() === latestDate.getDate();
+                    noticeDate.getMonth() === latestDate.getMonth() &&
+                    noticeDate.getDate() === latestDate.getDate();
             });
 
             if (noticesToAnnounce.length === 0) {
@@ -772,7 +769,6 @@ class PulchowkBot {
                                 });
 
                                 const MAX_PDF_PAGES_TO_CONVERT = 5; 
-
 
                                 if (fileName.toLowerCase().endsWith('.pdf')) {
                                     try {
@@ -904,6 +900,7 @@ class PulchowkBot {
             await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(e => console.error('Error deleting temp directory after all notices processed:', e));
         }
     }
+
 
 
     async _announceBirthdays() {
