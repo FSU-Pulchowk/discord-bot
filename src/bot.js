@@ -916,7 +916,7 @@ class PulchowkBot {
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
             if (!announcementChannel || announcementChannel.type !== ChannelType.GuildText) {
-                console.error(`[Scheduler] Configured birthday channel (${BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID}) not found or is not a text channel.`);
+                console.error(`[Scheduler] Configured birthday channel not found or is not a text channel.`);
                 return;
             }
         } catch (error) {
