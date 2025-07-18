@@ -7,12 +7,12 @@ import { initializeDatabase, db } from './database.js';
 import { emailService } from './services/emailService.js';
 import { scrapeLatestNotice } from './services/scraper.js';
 import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
+import { fromPath } from 'pdf2pic';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 import { promises as fsPromises, createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-
 async function writeServiceAccountKey() {
     const b64 = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_B64;
     if (!b64) {

@@ -120,6 +120,13 @@ async function initializeDatabase() {
                     join_time INTEGER NOT NULL,
                     PRIMARY KEY (user_id, guild_id)
                 )`);
+                db.run(`CREATE TABLE IF NOT EXISTS notices (
+                    title TEXT NOT NULL,
+                    link TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    announced_at INTEGER NOT NULL,
+                    PRIMARY KEY (link)
+                )`);
                 console.log('All database tables checked/created.');
                 resolve(db);
             });
