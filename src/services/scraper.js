@@ -3,25 +3,35 @@ import * as cheerio from 'cheerio';
 import { HttpProxyAgent } from 'http-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+];
+
+
 /**
- * Fetches a URL with a retry mechanism and proxy support.
+ * Fetches a URL with a retry mechanism, proxy support, and rotating user-agents.
  * @param {string} url - The URL to fetch.
  * @param {number} [retries=3] - The number of times to retry on failure.
- * @param {number} [timeout=30000] - The timeout for each request in milliseconds.
+ * @param {number} [timeout=60000] - The timeout for each request in milliseconds.
  * @returns {Promise<string>} - The HTML data from the URL.
  */
-async function fetchWithRetry(url, retries = 3, timeout = 30000) {
+async function fetchWithRetry(url, retries = 3, timeout = 60000) { // Increased default timeout
   const proxyUrl = process.env.PROXY_URL;
-
   const httpAgent = proxyUrl ? new HttpProxyAgent(proxyUrl) : undefined;
   const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+
+  const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
   const axiosInstance = axios.create({
     timeout,
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+      'User-Agent': randomUserAgent,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
       'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate',
     },
     httpAgent,
     httpsAgent,
@@ -34,12 +44,13 @@ async function fetchWithRetry(url, retries = 3, timeout = 30000) {
       return data;
     } catch (err) {
       if (err.code === 'ECONNABORTED' && attempt < retries) {
-        console.warn(`[Retry ${attempt}] Timeout fetching ${url}, retrying...`);
-        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        const waitTime = 5000 * attempt; 
+        console.warn(`[Retry ${attempt}] Timeout fetching ${url}, retrying in ${waitTime / 1000}s...`);
+        await new Promise((r) => setTimeout(r, waitTime));
       } else {
         console.error(`[Scraper] Failed to fetch ${url} on attempt ${attempt}. Error:`, err.message);
         if (attempt >= retries) {
-          throw err; 
+          throw err;
         }
       }
     }
@@ -63,7 +74,6 @@ export async function scrapeIoeExamNotice() {
       const titleElement = row.find('td:nth-child(2) a');
       const dateElement = row.find('td:nth-child(3)');
       const viewLinkElement = row.find('td:nth-child(4) a[href*="/Notice/Index/"]');
-      
       const downloadLinkElement = row.find('td:nth-child(4) a[target="_blank"]');
 
       if (titleElement.length && dateElement.length && viewLinkElement.length && downloadLinkElement.length) {
@@ -71,10 +81,11 @@ export async function scrapeIoeExamNotice() {
         const date = dateElement.text().trim();
         const noticePageLink = new URL(viewLinkElement.attr('href'), url).href;
         const pdfLink = new URL(downloadLinkElement.attr('href'), url).href;
+
         notices.push({
           title,
           link: noticePageLink,
-          attachments: [pdfLink], 
+          attachments: [pdfLink],
           date,
           source: 'IOE Exam Section',
         });
