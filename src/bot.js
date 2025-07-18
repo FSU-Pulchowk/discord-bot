@@ -1,6 +1,6 @@
 import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, Events } from 'discord.js';
 import { REST } from '@discordjs/rest';
-import { Routes } from 'discord-api-types/v9'; // Or v10, depending on your discord.js version
+import { Routes } from 'discord-api-types/v9'; 
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
 import { initializeDatabase, db } from './database.js';

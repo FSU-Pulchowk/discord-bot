@@ -5,7 +5,14 @@ import * as cheerio from 'cheerio';
 export async function scrapeIoeExamNotice() {
     const url = 'http://exam.ioe.edu.np/';
     try {
-        const { data } = await axios.get(url);
+        const axiosInstance = axios.create({
+            timeout: 5000, // 5 seconds
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Accept': 'text/html,application/xhtml+xml'
+            }
+        });
+        const { data } = await axiosInstance.get(url);
         const $ = cheerio.load(data);
         const notices = [];
 
@@ -39,7 +46,14 @@ export async function scrapeIoeExamNotice() {
 export async function scrapePcampusNotice() {
     const listUrl = 'https://pcampus.edu.np/category/general-notices/';
     try {
-        const { data: listData } = await axios.get(listUrl);
+        const axiosInstance = axios.create({
+            timeout: 5000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Accept': 'text/html,application/xhtml+xml'
+            }
+        });
+        const { data: listData } = await axiosInstance.get(listUrl);
         const $list = cheerio.load(listData);
         const latestArticle = $list('article').first();
 
@@ -48,7 +62,7 @@ export async function scrapePcampusNotice() {
         const date = latestArticle.find('time.entry-date').attr('datetime');
         const postId = latestArticle.attr('id');
 
-        const { data: pageData } = await axios.get(pageLink);
+        const { data: pageData } = await axiosInstance.get(pageLink);
         const $page = cheerio.load(pageData);
         const attachments = [];
         $page('.entry-content a').each((_, el) => {
