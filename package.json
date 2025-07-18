@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node ./src/bot.js",
+    "scrape": "node ./scrape.js",
     "deploy-commands-guild": "node deploy-commands.js --guild",
     "deploy-commands-global": "node deploy-commands.js --global"
   },
