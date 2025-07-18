@@ -92,12 +92,33 @@ async function deployGlobalCommands() {
     }
 }
 
+async function removeAllCommands() {
+    try {
+        console.log('Removing all global commands...');
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+        console.log('✅ All global commands removed.');
+
+        if (GUILD_ID) {
+        console.log(`Removing all commands in guild ${GUILD_ID}...`);
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
+        console.log(`✅ All guild commands removed from guild ${GUILD_ID}.`);
+        } else {
+        console.log('⚠️ No GUILD_ID set, skipping guild commands removal.');
+        }
+    } catch (error) {
+        console.error('Error removing commands:', error);
+    }
+}
+
 const args = process.argv.slice(2);
 if (args.includes('--guild')) {
     deployGuildCommands();
 } else if (args.includes('--global')) {
     deployGlobalCommands();
-} else {
+} else if(args.includes('--remove-slash')) {
+    await removeAllCommands();
+}
+else {
     console.log("Usage: node deploy-commands.js [--guild | --global]");
     console.log("  --guild: Deploy commands to the guild specified by GUILD_ID in .env (for testing)");
     console.log("  --global: Deploy commands globally (for production, takes up to 1 hour to propagate)");
