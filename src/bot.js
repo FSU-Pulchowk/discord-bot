@@ -920,7 +920,7 @@ class PulchowkBot {
                 return;
             }
         } catch (error) {
-            console.error(`[Scheduler] Error fetching birthday channel ${BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID}:`, error.message);
+            console.error(`[Scheduler] Error fetching respective birthday channel:`, error.message);
             return;
         }
 
