@@ -24,7 +24,7 @@ export async function initializeGoogleCalendarClient() {
     const absoluteKeyPath = path.resolve(__dirname, '../../', SERVICE_ACCOUNT_KEY_PATH); 
     
     if (!await fs.access(absoluteKeyPath).then(() => true).catch(() => false)) {
-        console.warn(`[HolidaysCommand] Google Service Account Key file not found at: ${absoluteKeyPath}. Holidays command will be disabled.`);
+        console.warn(`[HolidaysCommand] Google Service Account Key file not found at respective path. Holidays command will be disabled.`);
         calendarClient = null;
         return;
     }
