@@ -1,31 +1,56 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { HttpProxyAgent } from 'http-proxy-agent';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
-async function fetchWithRetry(url, retries = 3, timeout = 15000) {
+/**
+ * Fetches a URL with a retry mechanism and proxy support.
+ * @param {string} url - The URL to fetch.
+ * @param {number} [retries=3] - The number of times to retry on failure.
+ * @param {number} [timeout=30000] - The timeout for each request in milliseconds.
+ * @returns {Promise<string>} - The HTML data from the URL.
+ */
+async function fetchWithRetry(url, retries = 3, timeout = 30000) {
+  const proxyUrl = process.env.PROXY_URL;
+
+  const httpAgent = proxyUrl ? new HttpProxyAgent(proxyUrl) : undefined;
+  const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+
   const axiosInstance = axios.create({
     timeout,
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-      'Accept': 'text/html,application/xhtml+xml',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
     },
+    httpAgent,
+    httpsAgent,
   });
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      console.log(`[Attempt ${attempt}] Fetching ${url}` + (proxyUrl ? ' via proxy' : ''));
       const { data } = await axiosInstance.get(url);
       return data;
     } catch (err) {
       if (err.code === 'ECONNABORTED' && attempt < retries) {
         console.warn(`[Retry ${attempt}] Timeout fetching ${url}, retrying...`);
-        await new Promise((r) => setTimeout(r, 1000 * attempt));
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
       } else {
-        throw err;
+        console.error(`[Scraper] Failed to fetch ${url} on attempt ${attempt}. Error:`, err.message);
+        if (attempt >= retries) {
+          throw err; 
+        }
       }
     }
   }
   throw new Error(`Failed to fetch ${url} after ${retries} attempts.`);
 }
 
+/**
+ * Scrapes the latest notices from the IOE Examination Control Division website.
+ * @returns {Promise<Array<object>>} - A list of notice objects.
+ */
 export async function scrapeIoeExamNotice() {
   const url = 'http://exam.ioe.edu.np/';
   try {
@@ -34,20 +59,22 @@ export async function scrapeIoeExamNotice() {
     const notices = [];
 
     $('#datatable tbody tr').each((_, el) => {
-      const titleElement = $(el).find('td:nth-child(2) a');
-      const downloadLinkElement = $(el).find('td:nth-child(4) a[target="_blank"]');
-      const dateElement = $(el).find('td:nth-child(3)');
+      const row = $(el);
+      const titleElement = row.find('td:nth-child(2) a');
+      const dateElement = row.find('td:nth-child(3)');
+      const viewLinkElement = row.find('td:nth-child(4) a[href*="/Notice/Index/"]');
+      
+      const downloadLinkElement = row.find('td:nth-child(4) a[target="_blank"]');
 
-      if (titleElement.length && downloadLinkElement.length && dateElement.length) {
+      if (titleElement.length && dateElement.length && viewLinkElement.length && downloadLinkElement.length) {
         const title = titleElement.text().trim();
-        const relativePdfLink = downloadLinkElement.attr('href');
-        const pdfLink = new URL(relativePdfLink, url).href;
         const date = dateElement.text().trim();
-
+        const noticePageLink = new URL(viewLinkElement.attr('href'), url).href;
+        const pdfLink = new URL(downloadLinkElement.attr('href'), url).href;
         notices.push({
           title,
-          link: new URL(titleElement.attr('href'), url).href,
-          attachments: [pdfLink],
+          link: noticePageLink,
+          attachments: [pdfLink], 
           date,
           source: 'IOE Exam Section',
         });
@@ -56,11 +83,14 @@ export async function scrapeIoeExamNotice() {
 
     return notices;
   } catch (err) {
-    console.error('[Scraper] IOE Error:', err);
     return [];
   }
 }
 
+/**
+ * Scrapes the latest notice from the Pulchowk Campus website.
+ * @returns {Promise<object|null>} - A single notice object or null on failure.
+ */
 export async function scrapePcampusNotice() {
   const listUrl = 'https://pcampus.edu.np/category/general-notices/';
   try {
@@ -95,11 +125,14 @@ export async function scrapePcampusNotice() {
       source: 'Pulchowk Campus',
     };
   } catch (err) {
-    console.error('[Scraper] Pulchowk Error:', err);
     return null;
   }
 }
 
+/**
+ * Scrapes and combines the latest notices from all sources.
+ * @returns {Promise<Array<object>>} - A combined list of notice objects.
+ */
 export async function scrapeLatestNotice() {
   const [ioe, pcampus] = await Promise.all([
     scrapeIoeExamNotice(),
