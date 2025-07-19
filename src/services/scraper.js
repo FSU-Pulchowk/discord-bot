@@ -38,7 +38,7 @@ async function fetchWithPuppeteer(url, retries = 3, delay = 5000) {
                 headless: true
             });
             const page = await browser.newPage();
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36');
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36');
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 }); // Increased to 60 seconds
             await page.waitForSelector('#datatable tbody tr', { timeout: 30000 }); // Increased to 30 seconds
 
@@ -77,7 +77,7 @@ async function fetchWithAxios(url, retries = 3, delay = 5000) {
         try {
             const response = await axios.get(url, {
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
                 },
                 timeout: 30000, // Increased to 30 seconds
             });
