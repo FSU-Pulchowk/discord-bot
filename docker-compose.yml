@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  fsu-discord-bot:
+    container_name: fsu-discord-bot
+    image: agntperfect/fsu-discord-bot
+    user: botuser
+    security_opt:
+      - no-new-privileges:true
+    # read_only: true
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - fsu_data:/app/data:rw
+      - ./bot.db:/app/bot.db:rw
+    tmpfs:
+      - /tmp
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - fsu_net
+
+volumes:
+  fsu_data:
+    driver: local
+
+networks:
+  fsu_net:
+    name: fsu_net
+    driver: bridge
+    internal: false
