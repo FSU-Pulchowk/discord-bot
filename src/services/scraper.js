@@ -1,35 +1,108 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'; 
+
+puppeteer.use(StealthPlugin());
 
 /**
- * Fetches a URL using an HTTP request with axios.
- * @param {string} url - The URL to fetch.
- * @returns {Promise<string|null>} - The HTML content or null on failure.
+ * Sleeps for a given number of milliseconds.
+ * @param {number} ms - The number of milliseconds to sleep.
  */
-async function fetchWithAxios(url) {
-    console.log(`[HTTP] Fetching ${url} with axios...`);
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
-            }
-        });
-        return response.data;
-    } catch (error) {
-        console.error(`[HTTP] Failed to fetch ${url}: ${error.message}`);
-        return null;
-    }
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Scrapes IOE Exam Notices.
- * @returns {Promise<Array>} List of notices.
+ * Fetches HTML content using Puppeteer for dynamic content sites (like IOE exam site).
+ * Implements retry mechanism and stealth plugin.
+ * @param {string} url - The URL to fetch.
+ * @param {number} retries - Number of retries for the request.
+ * @param {number} delay - Delay between retries in milliseconds.
+ * @returns {Promise<string|null>} - HTML content or null on failure.
+ */
+async function fetchWithPuppeteer(url, retries = 3, delay = 5000) {
+    let browser;
+    for (let i = 0; i < retries; i++) {
+        try {
+            console.log(`[Puppeteer] Attempt ${i + 1} to fetch ${url}...`);
+            browser = await puppeteer.launch({
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-gpu',
+                    '--no-zygote',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage'
+                ],
+                headless: true
+            });
+            const page = await browser.newPage();
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36');
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 }); // Increased to 60 seconds
+            await page.waitForSelector('#datatable tbody tr', { timeout: 30000 }); // Increased to 30 seconds
+
+            const content = await page.content();
+            console.log(`[Puppeteer] Successfully fetched ${url}.`);
+            return content;
+        } catch (error) {
+            console.error(`[Puppeteer] Failed to fetch ${url} on attempt ${i + 1}: ${error.message}`);
+            if (browser) {
+                await browser.close();
+                browser = null;
+            }
+            if (i < retries - 1) {
+                console.log(`[Puppeteer] Retrying in ${delay / 1000} seconds...`);
+                await sleep(delay);
+            }
+        } finally {
+            if (browser) await browser.close();
+        }
+    }
+    console.error(`[Puppeteer] All ${retries} attempts failed for ${url}.`);
+    return null;
+}
+
+/**
+ * Fetches a URL using Axios for static sites.
+ * Implements retry mechanism.
+ * @param {string} url - The URL to fetch.
+ * @param {number} retries - Number of retries for the request.
+ * @param {number} delay - Delay between retries in milliseconds.
+ * @returns {Promise<string|null>} - HTML content or null on failure.
+ */
+async function fetchWithAxios(url, retries = 3, delay = 5000) {
+    for (let i = 0; i < retries; i++) {
+        console.log(`[HTTP] Attempt ${i + 1} to fetch ${url} with axios...`);
+        try {
+            const response = await axios.get(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+                },
+                timeout: 30000, // Increased to 30 seconds
+            });
+            console.log(`[HTTP] Successfully fetched ${url} with axios.`);
+            return response.data;
+        } catch (error) {
+            console.error(`[HTTP] Failed to fetch ${url} on attempt ${i + 1}: ${error.message}`);
+            if (i < retries - 1) {
+                console.log(`[HTTP] Retrying in ${delay / 1000} seconds...`);
+                await sleep(delay);
+            }
+        }
+    }
+    console.error(`[HTTP] All ${retries} attempts failed for ${url}.`);
+    return null;
+}
+
+/**
+ * Scrapes IOE Exam Notices using Puppeteer and your Cloudflare proxy.
  */
 export async function scrapeIoeExamNotice() {
     const url = 'https://proxy.abhishekkharel.com.np/discord-bot/http/exam.ioe.edu.np';
-    const data = await fetchWithAxios(url);
+    const data = await fetchWithPuppeteer(url); // Use default retries and delay
     if (!data) {
-        console.error('[Scraper] Could not retrieve IOE Exam data.');
+        console.error('[Scraper] Could not retrieve IOE Exam data after multiple attempts.');
         return [];
     }
 
@@ -44,8 +117,8 @@ export async function scrapeIoeExamNotice() {
         const downloadLinkEl = row.find('td:nth-child(4) a[target="_blank"]');
 
         if (titleEl.length && dateEl.length && viewLinkEl.length && downloadLinkEl.length) {
-            const noticeLink = url + viewLinkEl.attr('href');
-            const attachmentLink = url + downloadLinkEl.attr('href');
+            const noticeLink = new URL(viewLinkEl.attr('href'), url).href;
+            const attachmentLink = new URL(downloadLinkEl.attr('href'), url).href;
 
             notices.push({
                 title: titleEl.text().trim(),
@@ -62,14 +135,13 @@ export async function scrapeIoeExamNotice() {
 }
 
 /**
- * Scrapes latest Pulchowk Campus Notice.
- * @returns {Promise<Object|null>} Latest notice or null.
+ * Scrapes Pulchowk Campus Notices (static, so Axios + Cheerio is fine).
  */
 export async function scrapePcampusNotice() {
     const listUrl = 'https://pcampus.edu.np/category/general-notices/';
-    const listData = await fetchWithAxios(listUrl);
+    const listData = await fetchWithAxios(listUrl); // Use default retries and delay
     if (!listData) {
-        console.error('[Scraper] Could not retrieve Pulchowk Campus notices.');
+        console.error('[Scraper] Could not retrieve Pulchowk Campus notices after multiple attempts.');
         return null;
     }
 
@@ -91,9 +163,9 @@ export async function scrapePcampusNotice() {
         return null;
     }
 
-    const pageData = await fetchWithAxios(pageLink);
+    const pageData = await fetchWithAxios(pageLink); // Use default retries and delay
     if (!pageData) {
-        console.error(`[Scraper] Could not retrieve Pulchowk notice detail page ${pageLink}.`);
+        console.error(`[Scraper] Could not retrieve Pulchowk notice detail page ${pageLink} after multiple attempts.`);
         return null;
     }
 
@@ -120,7 +192,6 @@ export async function scrapePcampusNotice() {
 
 /**
  * Scrapes all notices and combines them.
- * @returns {Promise<Array>} Combined notice list.
  */
 export async function scrapeLatestNotice() {
     console.log('[Scraper] Starting full scrape...');

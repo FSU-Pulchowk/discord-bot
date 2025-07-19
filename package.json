@@ -28,6 +28,8 @@
     "pdf2pic": "^3.2.0",
     "pdfjs-dist": "^5.3.93",
     "puppeteer": "^24.14.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "sqlite3": "^5.1.7"
   }
 }
