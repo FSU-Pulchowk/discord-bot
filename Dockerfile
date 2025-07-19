@@ -1,7 +1,12 @@
 FROM node:20-slim
 
+RUN groupadd -r botuser && useradd -r -g botuser -d /app -s /bin/bash botuser
+
+WORKDIR /app
+RUN chown -R botuser:botuser /app
+
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         wget \
         ca-certificates \
         fonts-liberation \
@@ -22,14 +27,19 @@ RUN apt-get update && \
         xdg-utils \
         chromium \
         graphicsmagick \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
 
 # Set Chromium path
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-WORKDIR /app
-COPY package*.json ./
-RUN npm install --production
-COPY . .
+COPY --chown=botuser:botuser package*.json ./
+
+USER botuser
+
+RUN npm ci --omit=dev && \
+    npm cache clean --force
+
+COPY --chown=botuser:botuser . .
 
 CMD ["node", "./src/bot.js"]
