@@ -1,6 +1,6 @@
 import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, Events } from 'discord.js';
 import { REST } from '@discordjs/rest';
-import { Routes } from 'discord-api-types/v9'; 
+import { Routes } from 'discord-api-types/v9';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
 import { initializeDatabase, db } from './database.js';
@@ -13,6 +13,7 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { promises as fsPromises, createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
+
 async function writeServiceAccountKey() {
     const b64 = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_B64;
     if (!b64) {
@@ -29,6 +30,7 @@ async function writeServiceAccountKey() {
 }
 dotenv.config()
 await writeServiceAccountKey();
+
 class PulchowkBot {
     constructor(token, dbInstance) {
         this.token = token;
@@ -57,8 +59,9 @@ class PulchowkBot {
     async _setupEventListeners() {
         this.client.once('ready', () => this._onReady());
         this.client.on(Events.InteractionCreate, (interaction) => this._onInteractionCreate(interaction));
-        this.client.on('messageCreate', (message) => this._onMessageCreate(message)); 
+        this.client.on('messageCreate', (message) => this._onMessageCreate(message));
         this.client.on('guildMemberAdd', (member) => this._onGuildMemberAdd(member));
+        this.client.on('guildMemberRemove', (member) => this._onGuildMemberRemove(member));
         this.client.on('messageReactionAdd', (reaction, user) => this._onMessageReactionAdd(reaction, user));
         this.client.on('messageReactionRemove', (reaction, user) => this._onMessageReactionRemove(reaction, user));
         this.client.on('voiceStateUpdate', (oldState, newState) => this._onVoiceStateUpdate(oldState, newState));
@@ -150,12 +153,12 @@ class PulchowkBot {
                     await interaction.reply({ content: '❌ There was an error while executing this command!', ephemeral: true });
                 }
             }
-        } 
+        }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
             if (customId.startsWith('confirm_nuke_') || customId.startsWith('cancel_nuke_')) {
                 const nukeCommand = this.client.commands.get('nuke');
-                if (nukeCommand && typeof nukeCommand._nukeServerLogic === 'function') { // Assuming _nukeServerLogic is exported
+                if (nukeCommand && typeof nukeCommand._nukeServerLogic === 'function') {
                     if (customId.startsWith('confirm_nuke_')) {
                         if (interaction.user.id !== interaction.guild.ownerId) {
                             return interaction.reply({ content: '❌ Only the server owner can confirm this action.', ephemeral: true });
@@ -173,7 +176,7 @@ class PulchowkBot {
             }
             else if (customId.startsWith('confirm_setup_fsu_') || customId.startsWith('cancel_setup_fsu_')) {
                 const setupFSUCommand = this.client.commands.get('setupfsu');
-                if (setupFSUCommand && typeof setupFSUCommand._performSetupLogic === 'function') { 
+                if (setupFSUCommand && typeof setupFSUCommand._performSetupLogic === 'function') {
                     if (customId.startsWith('confirm_setup_fsu_')) {
                         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
                             return interaction.reply({ content: 'You do not have permission to confirm this action.', ephemeral: true });
@@ -197,16 +200,22 @@ class PulchowkBot {
                 return;
             }
             else if (customId.startsWith('confirm_otp_button_')) {
-                const confirmOtpCmd = this.client.commands.get('confirmotp');
-                if (confirmOtpCmd && typeof confirmOtpCmd.handleButtonInteraction === 'function') {
-                    await confirmOtpCmd.handleButtonInteraction(interaction);
+                const verifyCmd = this.client.commands.get('verify'); 
+                if (verifyCmd && typeof verifyCmd.execute === 'function') { 
+                    await verifyCmd.execute(interaction);
+                } else {
+                    console.warn(`Verify command not found or execute function missing for button interaction.`);
+                    await interaction.reply({ content: '❌ An error occurred with the verification button. Please try the `/verify` command directly.', ephemeral: true });
                 }
                 return;
             }
              else if (customId.startsWith('suggest_vote_')) {
                 await this._handleSuggestionVote(interaction);
             }
-        } 
+            else if (customId.startsWith('delete_suggestion_')) {
+                await this._handleSuggestionDelete(interaction);
+            }
+        }
         else if (interaction.isModalSubmit()) {
             if (interaction.customId === 'verifyModal') {
                 const verifyCmd = this.client.commands.get('verify');
@@ -236,32 +245,87 @@ class PulchowkBot {
     async _onGuildMemberAdd(member) {
         this.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
             if (err) {
-                    console.error('Error fetching welcome config:', err.message);
-                    return;
+                console.error('Error fetching welcome config:', err.message);
+                return;
             }
-            if (row && row.welcome_message_content) {
-                const messageContent = row.welcome_message_content.replace(/{user}/g, `<@${member.id}>`);
 
-                if (row.send_welcome_as_dm) {
-                    try {
-                        await member.send(messageContent);
-                        console.log(`Sent welcome DM to ${member.user.tag}`);
-                    } catch (dmErr) {
-                        console.warn(`Could not send welcome DM to ${member.user.tag}: ${dmErr.message}`);
-                        if (row.welcome_channel_id) {
-                            const channel = member.guild.channels.cache.get(row.welcome_channel_id);
-                            if (channel && channel.type === ChannelType.GuildText) {
-                                await channel.send(`Welcome <@${member.id}>! (Could not send DM)\n${messageContent}`).catch(e => console.error('Error sending welcome fallback to channel:', e));
-                            }
-                        }
+            const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
+
+            try {
+                const verifyButton = new ButtonBuilder()
+                    .setCustomId(`confirm_otp_button_${member.user.id}`) 
+                    .setLabel('Verify Your Account')
+                    .setStyle(ButtonStyle.Primary);
+
+                const rowAction = new ActionRowBuilder().addComponents(verifyButton);
+
+                const dmEmbed = new EmbedBuilder()
+                    .setColor('#0099ff')
+                    .setTitle(`👋 Welcome to ${member.guild.name}!`)
+                    .setDescription(`We're excited to have you here, ${member.user.username}! To gain full access to the server, please verify your account.`)
+                    .addFields(
+                        { name: 'How to Verify:', value: 'Click the button below to start the verification process and get your roles!' }
+                    )
+                    .setThumbnail(userAvatar)
+                    .setFooter({ text: 'Pulchowk Bot | Secure Verification' })
+                    .setTimestamp();
+
+                await member.send({ embeds: [dmEmbed], components: [rowAction] });
+                console.log(`Sent welcome DM with verify button to ${member.user.tag}`);
+            } catch (dmErr) {
+                console.warn(`Could not send welcome DM to ${member.user.tag}: ${dmErr.message}`);
+            }
+
+            if (row && row.welcome_message_content && row.welcome_channel_id && !row.send_welcome_as_dm) {
+                const channel = member.guild.channels.cache.get(row.welcome_channel_id);
+                if (channel && channel.type === ChannelType.GuildText) {
+                    const publicWelcomeEmbed = new EmbedBuilder()
+                        .setColor('#00FF00')
+                        .setTitle(`🎉 A New Pulchowkian Has Arrived!`)
+                        .setDescription(`Please give a warm welcome to <@${member.id}>!`)
+                        .setThumbnail(userAvatar)
+                        .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
+                        .setTimestamp();
+
+                    if (row.welcome_message_content) {
+                        publicWelcomeEmbed.addFields({
+                            name: 'Message from the Admins:',
+                            value: row.welcome_message_content.replace(/{user}/g, `<@${member.id}>`)
+                        });
                     }
-                } else if (row.welcome_channel_id) {
-                    const channel = member.guild.channels.cache.get(row.welcome_channel_id);
-                    if (channel && channel.type === ChannelType.GuildText) {
-                        await channel.send(messageContent).catch(e => console.error('Error sending welcome message to channel:', e));
-                    } else {
-                        console.warn(`Configured welcome channel ${row.welcome_channel_id} not found or is not a text channel in guild ${member.guild.name}.`);
-                    }
+
+                    await channel.send({ embeds: [publicWelcomeEmbed] }).catch(e => console.error('Error sending public welcome message:', e));
+                    console.log(`Sent public welcome message to ${channel.name} for ${member.user.tag}`);
+                } else {
+                    console.warn(`Configured welcome channel ${row.welcome_channel_id} not found or is not a text channel for public welcome.`);
+                }
+            }
+        });
+    }
+
+    async _onGuildMemberRemove(member) {
+        this.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
+            if (err) {
+                console.error('Error fetching farewell config:', err.message);
+                return;
+            }
+
+            if (row && row.farewell_channel_id) {
+                const channel = member.guild.channels.cache.get(row.farewell_channel_id);
+                if (channel && channel.type === ChannelType.GuildText) {
+                    const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
+                    const farewellEmbed = new EmbedBuilder()
+                        .setColor('#FF0000')
+                        .setTitle(`👋 Farewell, Comrade!`)
+                        .setDescription(`${member.user.tag} has left the server. We hope they had a great time with us.`)
+                        .setThumbnail(userAvatar)
+                        .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
+                        .setTimestamp();
+
+                    await channel.send({ embeds: [farewellEmbed] }).catch(e => console.error('Error sending farewell message:', e));
+                    console.log(`Sent farewell message for ${member.user.tag} to ${channel.name}`);
+                } else {
+                    console.warn(`Configured farewell channel ${row.farewell_channel_id} not found or is not a text channel.`);
                 }
             }
         });
@@ -632,7 +696,7 @@ class PulchowkBot {
         console.log('[Scheduler] Checking for new notices...');
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
         const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
-        const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments'); 
+        const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments');
 
         console.log(`[Debug] Current Working Directory (process.cwd()): ${process.cwd()}`);
         console.log(`[Debug] Calculated TEMP_ATTACHMENT_DIR: ${TEMP_ATTACHMENT_DIR}`);
@@ -679,7 +743,6 @@ class PulchowkBot {
                 adminChannel = null;
             }
         }
-
         try {
             let scrapedNotices = await scrapeLatestNotice();
 
@@ -741,7 +804,7 @@ class PulchowkBot {
                         .setTimestamp(new Date(notice.date));
 
                     let filesToSend = [];
-                    let tempFilesOnDisk = []; 
+                    let tempFilesOnDisk = [];
                     let description = `A new notice has been published.`;
 
                     if (notice.attachments && notice.attachments.length > 0) {
@@ -751,9 +814,9 @@ class PulchowkBot {
                             try {
                                 const fileName = path.basename(new URL(attachmentUrl).pathname);
                                 const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
-                                tempFilesOnDisk.push(tempFilePath); 
+                                tempFilesOnDisk.push(tempFilePath);
 
-                                console.log(`[Debug] Attempting to download ${attachmentUrl} to ${tempFilePath}`); 
+                                console.log(`[Debug] Attempting to download ${attachmentUrl} to ${tempFilePath}`);
                                 const response = await axios({
                                     method: 'GET',
                                     url: attachmentUrl,
@@ -767,9 +830,7 @@ class PulchowkBot {
                                     writer.on('finish', resolve);
                                     writer.on('error', reject);
                                 });
-
-                                const MAX_PDF_PAGES_TO_CONVERT = 5; 
-
+                                const MAX_PDF_PAGES_TO_CONVERT = 5;
                                 if (fileName.toLowerCase().endsWith('.pdf')) {
                                     try {
                                         let totalPdfPages = 0;
@@ -848,9 +909,7 @@ class PulchowkBot {
                             }
                         }
                     }
-
                     noticeEmbed.setDescription(description);
-
                     try {
                         await noticeChannel.send({ embeds: [noticeEmbed], files: filesToSend });
                         console.log(`Sent notice and attachments for "${notice.title}" to Discord.`);
@@ -867,7 +926,6 @@ class PulchowkBot {
                             }
                         }
                     }
-
                     await new Promise((resolve, reject) => {
                         this.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
                             [notice.title, notice.link, notice.date, Date.now()],
@@ -888,7 +946,7 @@ class PulchowkBot {
                 } else {
                     console.log(`[Scheduler] Notice from ${notice.source} ("${notice.title}") already announced. Skipping.`);
                 }
-            } 
+            }
 
         } catch (error) {
             console.error('[Scheduler] Error during notice scraping or announcement:', error.message);
@@ -900,9 +958,6 @@ class PulchowkBot {
             await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(e => console.error('Error deleting temp directory after all notices processed:', e));
         }
     }
-
-
-
     async _announceBirthdays() {
         console.log('[Scheduler] Checking for birthdays...');
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
@@ -923,13 +978,10 @@ class PulchowkBot {
             console.error(`[Scheduler] Error fetching respective birthday channel:`, error.message);
             return;
         }
-
         const today = new Date();
         const currentMonth = today.getMonth() + 1;
         const currentDay = today.getDate();
-
         const guilds = this.client.guilds.cache;
-
         for (const [_, guild] of guilds) {
             try {
                 this.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
@@ -939,7 +991,6 @@ class PulchowkBot {
                             console.error(`Error fetching birthdays for guild ${guild.id}:`, err.message);
                             return;
                         }
-
                         if (rows.length > 0) {
                             const birthdayUsers = [];
                             let firstBirthdayUserAvatarUrl = null;
@@ -960,10 +1011,8 @@ class PulchowkBot {
                                     birthdayUsers.push(`• Unknown User (ID: ${row.user_id})`);
                                 }
                             }
-
-
                             const authorName = `Free Students' Union, Pulchowk Campus - 2081`;
-                            const authorIconUrl = "https://fsu.abhishekkharel.com.np/images/fsulogo.png";
+                            const authorIconUrl = "https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&";
                             const authorWebsiteUrl = "https://www.facebook.com/fsupulchowk";
                             const birthdayEmbed = new EmbedBuilder()
                                 .setColor('#FFD700')
@@ -979,7 +1028,7 @@ class PulchowkBot {
                             if (firstBirthdayUserAvatarUrl) {
                                 birthdayEmbed.setThumbnail(firstBirthdayUserAvatarUrl);
                             } else {
-                                birthdayEmbed.setThumbnail('https://fsu.abhishekkharel.com.np/images/fsulogo.png')
+                                birthdayEmbed.setThumbnail('https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&')
                             }
                             await announcementChannel.send({ embeds: [birthdayEmbed] }).catch(e => console.error(`Error sending birthday announcement in guild ${guild.id}:`, e));
                         }
@@ -991,6 +1040,66 @@ class PulchowkBot {
         }
     }
 
+    async _handleSuggestionDelete(interaction) {
+        try {
+            await interaction.deferReply({ ephemeral: true });
+
+            const suggestionId = interaction.customId.split('_')[2];
+            if (!suggestionId) {
+                return interaction.editReply({ content: '❌ Could not find the suggestion ID for this button.' });
+            }
+
+            const db = this.db;
+            db.get(`SELECT user_id, message_id, status, created_at FROM suggestions WHERE id = ? AND guild_id = ?`, [suggestionId, interaction.guild.id], async (err, row) => {
+                if (err) {
+                    console.error('Error fetching suggestion to delete:', err.message);
+                    return interaction.editReply({ content: '❌ An error occurred while fetching the suggestion from the database.' });
+                }
+                if (!row) {
+                    try {
+                        await interaction.message.edit({ components: [] });
+                    } catch (e) {
+                        return interaction.editReply({ content: '❌ This suggestion could not be found in the database. It might have already been deleted.' });
+                    }
+                }
+                const isAuthor = interaction.user.id === row.user_id;
+                const isModerator = interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages);
+
+                if (isModerator) {
+                } else if (isAuthor) {
+                    const oneHour = 60 * 60 * 1000;
+                    const suggestionAge = Date.now() - row.created_at;
+                    if (suggestionAge > oneHour) {
+                        return interaction.editReply({ content: "❌ You can only delete your own suggestion within one hour of posting it." });
+                    }
+                } else {
+                    return interaction.editReply({ content: "❌ You don't have permission to delete this suggestion. Only the author (within 1 hour) or a moderator can." });
+                }
+
+                try {
+                    const suggestionsChannel = await this.client.channels.fetch(process.env.SUGGESTIONS_CHANNEL_ID);
+                    const suggestionMessage = await suggestionsChannel.messages.fetch(row.message_id);
+                    await suggestionMessage.delete();
+                } catch (deleteMsgErr) {
+                    console.warn(`Could not delete suggestion message ${row.message_id}: ${deleteMsgErr.message}. It may have already been deleted.`);
+                }
+                db.run(`DELETE FROM suggestions WHERE id = ?`, [suggestionId], (deleteDbErr) => {
+                    if (deleteDbErr) {
+                        console.error('Error deleting suggestion from database:', deleteDbErr.message);
+                        return interaction.editReply({ content: '❌ The suggestion message was deleted, but there was an error removing it from the database.' });
+                    }
+                    interaction.editReply({ content: `✅ Suggestion #${suggestionId} has been successfully deleted.` });
+                });
+            });
+        } catch (error) {
+            console.error('Error in _handleSuggestionDelete:', error);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: '❌ An unexpected error occurred.', ephemeral: true }).catch(() => {});
+            } else {
+                await interaction.editReply({ content: '❌ An unexpected error occurred.' }).catch(() => {});
+            }
+        }
+    }
     start() {
         this.client.login(this.token);
     }
@@ -999,7 +1108,7 @@ class PulchowkBot {
 async function main() {
     try {
         const database = await initializeDatabase();
-        const bot = new PulchowkBot(process.env.BOT_TOKEN, database); 
+        const bot = new PulchowkBot(process.env.BOT_TOKEN, database);
         bot.start();
     } catch (error) {
         console.error('Failed to start bot:', error);

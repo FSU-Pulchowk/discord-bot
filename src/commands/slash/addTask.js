@@ -7,14 +7,14 @@ export const data = new SlashCommandBuilder()
         option.setName('description')
             .setDescription('The description of the task')
             .setRequired(true))
-    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator); 
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.KickMembers); 
 
 export async function execute(interaction) {
     if (!interaction.guild) {
         return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
     }
 
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
         return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
     }
 

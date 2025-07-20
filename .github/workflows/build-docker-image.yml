@@ -1,33 +1,27 @@
 name: Docker Image CI
-
 on:
   push:
     branches:
-      - main # This workflow runs on pushes to the 'main' branch
-
+      - main 
 env:
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }} # Your Docker Hub username
-  IMAGE_NAME: fsu-discord-bot # Name for your Docker image (e.g., your-repo-name)
-
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  IMAGE_NAME: fsu-discord-bot
 jobs:
   build-and-push-docker-image:
-    runs-on: ubuntu-latest # Use the latest Ubuntu runner
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4 # Action to check out your repository code
-
+        uses: actions/checkout@v4
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3 # Action to log in to Docker Hub
+        uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }} # Use a GitHub Secret for your Docker Hub password
-
+          password: ${{ secrets.DOCKER_PASSWORD }}
       - name: Build and Push Docker Image
-        uses: docker/build-push-action@v5 # Action to build and push Docker images
+        uses: docker/build-push-action@v5
         with:
-          context: . # Build context is the root of the repository
-          push: true # Push the image to Docker Hub
-          tags: | # Define image tags
+          context: .
+          push: true 
+          tags: | 
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}

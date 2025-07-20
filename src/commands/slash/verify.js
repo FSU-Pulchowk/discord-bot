@@ -1,13 +1,12 @@
 import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, ActionRowBuilder, TextInputStyle, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { emailService } from '../../services/emailService.js'; 
-import { generateOtp } from '../../utils/otpGenerator.js'; 
+import { emailService } from '../../services/emailService.js';
+import { generateOtp } from '../../utils/otpGenerator.js';
 import dotenv from 'dotenv';
+import { db } from '../../database.js';
 
 dotenv.config();
 
-// Using a Map for OTP storage (in-memory, not persistent across restarts)
-// In a production environment, consider a persistent store like Redis or a database.
-const otpCache = new Map(); // Stores { userId: { otp: string, email: string, realName: string, discordUsername: string, timestamp: number } }
+const otpCache = new Map();
 
 export const data = new SlashCommandBuilder()
     .setName('verify')
@@ -15,7 +14,7 @@ export const data = new SlashCommandBuilder()
 
 /**
  * Executes the /verify slash command.
- * Presents a modal to the user to collect their real name and college email.
+ * Presents a modal to the user to collect their real name, college email, and birthdate.
  * @param {import('discord.js').ChatInputCommandInteraction} interaction - The interaction object.
  */
 export async function execute(interaction) {
@@ -43,10 +42,18 @@ export async function execute(interaction) {
         .setPlaceholder('e.g., rollno.name@pcampus.edu.np')
         .setRequired(true);
 
+    const birthdateInput = new TextInputBuilder()
+        .setCustomId('birthdateInput')
+        .setLabel('Your Birthdate (YYYY-MM-DD)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 2000-01-31 (Year is mandatory)')
+        .setRequired(true);
+
     const firstActionRow = new ActionRowBuilder().addComponents(realNameInput);
     const secondActionRow = new ActionRowBuilder().addComponents(emailInput);
+    const thirdActionRow = new ActionRowBuilder().addComponents(birthdateInput); // New row for birthdate
 
-    modal.addComponents(firstActionRow, secondActionRow);
+    modal.addComponents(firstActionRow, secondActionRow, thirdActionRow); // Add new row to modal
 
     await interaction.showModal(modal);
 }
@@ -62,19 +69,32 @@ export async function handleModalSubmit(interaction) {
 
     const realName = interaction.fields.getTextInputValue('realNameInput').trim();
     const email = interaction.fields.getTextInputValue('emailInput').trim().toLowerCase();
+    const birthdateString = interaction.fields.getTextInputValue('birthdateInput').trim();
     const discordUsername = interaction.user.tag;
     const COLLEGE_EMAIL_DOMAIN = process.env.COLLEGE_EMAIL_DOMAIN || '@pcampus.edu.np';
+
     if (!email.endsWith(COLLEGE_EMAIL_DOMAIN)) {
         return interaction.editReply({ content: `❌ Please use your official college email address ending with \`${COLLEGE_EMAIL_DOMAIN}\`.` });
     }
 
-    const otp = generateOtp(); 
+    const birthdateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!birthdateRegex.test(birthdateString)) {
+        return interaction.editReply({ content: '❌ Invalid birthdate format. Please use YYYY-MM-DD (e.g., 2000-01-31). Year is mandatory.' });
+    }
+
+    const [year, month, day] = birthdateString.split('-').map(Number);
+    if (isNaN(year) || isNaN(month) || isNaN(day) || month < 1 || month > 12 || day < 1 || day > 31) {
+        return interaction.editReply({ content: '❌ Invalid birthdate. Please ensure month and day are valid numbers.' });
+    }
+
+    const otp = generateOtp();
 
     otpCache.set(interaction.user.id, {
         otp,
         email,
         realName,
         discordUsername,
+        birthdate: { year, month, day }, // Store parsed birthdate
         timestamp: Date.now()
     });
 
@@ -99,7 +119,7 @@ export async function handleModalSubmit(interaction) {
 
     } catch (error) {
         console.error('Error during verification modal submission or email sending:', error);
-        otpCache.delete(interaction.user.id); 
+        otpCache.delete(interaction.user.id);
         await interaction.editReply({ content: '❌ Failed to send OTP. Please ensure your email is correct and try again later. If the issue persists, contact an admin.' });
     }
 }
@@ -110,4 +130,21 @@ export async function handleModalSubmit(interaction) {
  */
 export function getOtpCache() {
     return otpCache;
+}
+
+export async function saveBirthday(userId, guildId, birthdate, setBy) {
+    const { year, month, day } = birthdate;
+    return new Promise((resolve, reject) => {
+        db.run(`INSERT OR REPLACE INTO birthdays (user_id, guild_id, month, day, year, set_by) VALUES (?, ?, ?, ?, ?, ?)`,
+            [userId, guildId, month, day, year, setBy],
+            function(err) {
+                if (err) {
+                    console.error('Error saving birthday:', err.message);
+                    return reject(err);
+                }
+                console.log(`Birthday for user ${userId} saved/updated.`);
+                resolve(this.lastID);
+            }
+        );
+    });
 }

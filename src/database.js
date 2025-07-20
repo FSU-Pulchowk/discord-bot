@@ -95,7 +95,8 @@ async function initializeDatabase() {
                     guild_id TEXT PRIMARY KEY,
                     welcome_message_content TEXT,
                     welcome_channel_id TEXT,
-                    send_welcome_as_dm BOOLEAN DEFAULT 0
+                    send_welcome_as_dm BOOLEAN DEFAULT 0,
+                    farewell_channel_id TEXT
                 )`);
                 db.run(`CREATE TABLE IF NOT EXISTS warnings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,4 +135,4 @@ async function initializeDatabase() {
     });
 }
 
-export { initializeDatabase, db }; 
+export { initializeDatabase, db };

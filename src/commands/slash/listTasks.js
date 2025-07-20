@@ -13,14 +13,14 @@ export const data = new SlashCommandBuilder()
                 { name: 'In-Progress', value: 'in-progress' },
                 { name: 'All', value: 'all' }
             ))
-    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator); // Requires Administrator permission
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.KickMembers); 
 
 export async function execute(interaction) {
     if (!interaction.guild) {
         return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
     }
 
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
         return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
     }
 
@@ -93,6 +93,6 @@ export async function execute(interaction) {
             }
             embed.setDescription(taskDescriptions.join('\n\n'));
         }
-        interaction.reply({ embeds: [embed] }); // Can be ephemeral or public
+        interaction.reply({ embeds: [embed] });
     });
 }

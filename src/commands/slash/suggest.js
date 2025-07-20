@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, ChannelType } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 
 export const data = new SlashCommandBuilder()
     .setName('suggest')
@@ -19,60 +19,117 @@ export async function execute(interaction) {
     const userId = interaction.user.id;
     const db = interaction.client.db;
 
-    const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID || '';
+    const confirmEmbed = new EmbedBuilder()
+        .setColor('#FFA500')
+        .setTitle('Confirm Your Suggestion')
+        .setDescription('Please review your suggestion. Press "Confirm" to submit it to the suggestions channel.')
+        .addFields({ name: 'Your Suggestion', value: suggestionText });
 
-    if (SUGGESTIONS_CHANNEL_ID === '') {
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ The suggestions channel ID is not configured by the bot owner. Please contact an admin.')], ephemeral: true });
-    }
+    const confirmButton = new ButtonBuilder()
+        .setCustomId('confirm_suggestion')
+        .setLabel('Confirm')
+        .setStyle(ButtonStyle.Success);
 
-    const suggestionsChannel = interaction.guild.channels.cache.get(SUGGESTIONS_CHANNEL_ID);
-    if (!suggestionsChannel || suggestionsChannel.type !== ChannelType.GuildText) {
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ The configured suggestions channel was not found or is not a text channel. Please contact an admin.')], ephemeral: true });
-    }
-    
-    if (!suggestionsChannel.permissionsFor(interaction.client.user).has('SendMessages')) {
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ I do not have permission to send messages in the configured suggestions channel (<#${SUGGESTIONS_CHANNEL_ID}>).`)], ephemeral: true });
-    }
+    const cancelButton = new ButtonBuilder()
+        .setCustomId('cancel_suggestion')
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary);
 
-    try {
-        const tempEmbed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('💡 New Suggestion')
-            .setDescription(suggestionText)
-            .addFields(
-                { name: 'Suggested By', value: interaction.user.tag, inline: true },
-                { name: 'Status', value: 'Pending', inline: true }
-            )
-            .setFooter({ text: `Suggestion ID: Pending | Votes: 👍 0 / 👎 0` })
-            .setTimestamp();
-        
-        await interaction.deferReply({ ephemeral: true }); // Defer initial reply as sending message + reacting takes time
+    const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
 
-        const sentMessage = await suggestionsChannel.send({ embeds: [tempEmbed] });
-        
-        await sentMessage.react('👍');
-        await sentMessage.react('👎');
+    const confirmationMessage = await interaction.reply({
+        embeds: [confirmEmbed],
+        components: [row],
+        ephemeral: true
+    });
 
-        db.run(`INSERT INTO suggestions (guild_id, message_id, user_id, suggestion_text, status, upvotes, downvotes, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
-            [guildId, sentMessage.id, userId, suggestionText, 'pending', Date.now()],
-            function(err) {
-                if (err) {
-                    console.error('Error saving suggestion to database:', err.message);
-                    sentMessage.delete().catch(console.warn); 
-                    return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ An error occurred while saving your suggestion: ${err.message}`)] });
-                }
-                const finalEmbed = EmbedBuilder.from(tempEmbed).setFooter({ text: `Suggestion ID: ${this.lastID} | Votes: 👍 0 / 👎 0` });
-                sentMessage.edit({ embeds: [finalEmbed] }).catch(console.warn);
+    const collector = confirmationMessage.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 60000 
+    });
 
-                interaction.editReply({ embeds: [new EmbedBuilder().setColor('#00FF00').setDescription(`✅ Your suggestion **#${this.lastID}** has been submitted to <#${SUGGESTIONS_CHANNEL_ID}>!`)] }).catch(console.error);
-            }
-        );
-    } catch (error) {
-        console.error('Error processing suggestion command:', error);
-        if (interaction.deferred || interaction.replied) {
-            interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ An unexpected error occurred: ${error.message}`)] }).catch(console.error);
-        } else {
-            interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ An unexpected error occurred: ${error.message}`)], ephemeral: true }).catch(console.error);
+    collector.on('collect', async i => {
+        // Ensure it's the original user interacting
+        if (i.user.id !== interaction.user.id) {
+            await i.reply({ content: 'You cannot use these buttons.', ephemeral: true });
+            return;
         }
-    }
+        const disabledRow = new ActionRowBuilder().addComponents(
+            confirmButton.setDisabled(true),
+            cancelButton.setDisabled(true)
+        );
+        await i.update({ components: [disabledRow] });
+
+        if (i.customId === 'confirm_suggestion') {
+            const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID || '';
+            if (!SUGGESTIONS_CHANNEL_ID) {
+                return i.followUp({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ The suggestions channel ID is not configured.')], ephemeral: true });
+            }
+            const suggestionsChannel = interaction.guild.channels.cache.get(SUGGESTIONS_CHANNEL_ID);
+            if (!suggestionsChannel || suggestionsChannel.type !== ChannelType.GuildText) {
+                return i.followUp({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ The configured suggestions channel was not found or is not a text channel.')], ephemeral: true });
+            }
+            if (!suggestionsChannel.permissionsFor(interaction.client.user).has('SendMessages')) {
+                return i.followUp({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ I do not have permission to send messages in the configured suggestions channel.`)], ephemeral: true });
+            }
+
+            try {
+                const suggestionEmbed = new EmbedBuilder()
+                    .setColor('#0099ff')
+                    .setTitle('💡 New Suggestion')
+                    .setDescription(suggestionText)
+                    .addFields(
+                        { name: 'Suggested By', value: interaction.user.tag, inline: true },
+                        { name: 'Status', value: 'Pending', inline: true }
+                    )
+                    .setFooter({ text: `Suggestion ID: Pending | Votes: 👍 0 / 👎 0` })
+                    .setTimestamp();
+
+                const sentMessage = await suggestionsChannel.send({ embeds: [suggestionEmbed] });
+                await sentMessage.react('👍');
+                await sentMessage.react('👎');
+
+                db.run(`INSERT INTO suggestions (guild_id, message_id, user_id, suggestion_text, status, upvotes, downvotes, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
+                    [guildId, sentMessage.id, userId, suggestionText, 'pending', Date.now()],
+                    function (err) {
+                        if (err) {
+                            console.error('Error saving suggestion to database:', err.message);
+                            sentMessage.delete().catch(console.warn);
+                            i.followUp({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ An error occurred while saving your suggestion.`)], ephemeral: true });
+                            return;
+                        }
+                        const suggestionId = this.lastID;
+                        const finalEmbed = EmbedBuilder.from(suggestionEmbed).setFooter({ text: `Suggestion ID: ${suggestionId} | Votes: 👍 0 / 👎 0` });
+                        
+                        const deleteButton = new ButtonBuilder()
+                            .setCustomId(`delete_suggestion_${suggestionId}`)
+                            .setLabel('Delete')
+                            .setStyle(ButtonStyle.Danger)
+                            .setEmoji('🗑️');
+                        
+                        const suggestionRow = new ActionRowBuilder().addComponents(deleteButton);
+                        
+                        sentMessage.edit({ embeds: [finalEmbed], components: [suggestionRow] }).catch(console.warn);
+                        
+                        i.followUp({ embeds: [new EmbedBuilder().setColor('#00FF00').setDescription(`✅ Your suggestion **#${suggestionId}** has been submitted to <#${SUGGESTIONS_CHANNEL_ID}>!`)], ephemeral: true });
+                    }
+                );
+            } catch (error) {
+                console.error('Error processing suggestion submission:', error);
+                i.followUp({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ An unexpected error occurred during submission.`)], ephemeral: true });
+            }
+        } else if (i.customId === 'cancel_suggestion') {
+            await i.followUp({ content: 'Your suggestion has been cancelled.', ephemeral: true });
+        }
+    });
+
+    collector.on('end', collected => {
+        if (collected.size === 0) {
+            interaction.editReply({
+                content: 'You did not respond in time. Your suggestion has been cancelled.',
+                embeds: [],
+                components: []
+            }).catch(console.error);
+        }
+    });
 }
