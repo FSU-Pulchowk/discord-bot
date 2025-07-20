@@ -685,8 +685,8 @@ class PulchowkBot {
 
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
         if (BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID && BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID !== 'YOUR_BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID_HERE') {
-            schedule.scheduleJob('0 9 * * *', () => this._announceBirthdays());
-            console.log('Scheduled daily birthday announcements for 9 AM.');
+            schedule.scheduleJob('0 0 * * *', () => this._announceBirthdays());
+            console.log('Scheduled daily birthday announcements for 12 AM.');
         } else {
             console.warn('BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID is not set or invalid. Birthday announcements disabled.');
         }
