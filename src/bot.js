@@ -278,7 +278,7 @@ class PulchowkBot {
 
             if (row && row.welcome_message_content && row.welcome_channel_id && !row.send_welcome_as_dm) {
                 const channel = member.guild.channels.cache.get(row.welcome_channel_id);
-                if (channel && channel.type === ChannelType.GuildText) {
+                if (channel || (channel.type === ChannelType.GuildText && channel.type === ChannelType.GuildAnnouncement)) {
                     const publicWelcomeEmbed = new EmbedBuilder()
                         .setColor('#00FF00')
                         .setTitle(`🎉 A New Pulchowkian Has Arrived!`)
@@ -312,7 +312,7 @@ class PulchowkBot {
 
             if (row && row.farewell_channel_id) {
                 const channel = member.guild.channels.cache.get(row.farewell_channel_id);
-                if (channel && channel.type === ChannelType.GuildText) {
+                if (channel || (channel.type === ChannelType.GuildText && channel.type === ChannelType.GuildAnnouncement)) {
                     const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
                     const farewellEmbed = new EmbedBuilder()
                         .setColor('#FF0000')
@@ -725,7 +725,7 @@ class PulchowkBot {
         let noticeChannel;
         try {
             noticeChannel = await this.client.channels.fetch(TARGET_NOTICE_CHANNEL_ID);
-            if (!noticeChannel || noticeChannel.type !== ChannelType.GuildText) {
+            if (!noticeChannel || (noticeChannel.type !== ChannelType.GuildText && noticeChannel.type !== ChannelType.GuildAnnouncement)) {
                 console.error(`[Scheduler] Configured notice channel (${TARGET_NOTICE_CHANNEL_ID}) not found or is not a text channel.`);
                 return;
             }
@@ -970,7 +970,7 @@ class PulchowkBot {
         let announcementChannel;
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
-            if (!announcementChannel || announcementChannel.type !== ChannelType.GuildText) {
+            if (!announcementChannel || (announcementChannel.type !== ChannelType.GuildText && announcementChannel.type !== ChannelType.GuildAnnouncement)) {
                 console.error(`[Scheduler] Configured birthday channel not found or is not a text channel.`);
                 return;
             }
