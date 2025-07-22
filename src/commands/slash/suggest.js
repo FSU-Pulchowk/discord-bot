@@ -94,21 +94,21 @@ export async function execute(interaction) {
         }
 
         if (i.customId === 'confirm_suggestion') {
-        const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
-        if (!SUGGESTIONS_CHANNEL_ID) {
-            return interaction.followUp({
-            embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel is not configured.')],
-            ephemeral: true
-            }).catch(() => {});
-        }
+            const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
+            if (!SUGGESTIONS_CHANNEL_ID) {
+                return interaction.followUp({
+                embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel is not configured.')],
+                ephemeral: true
+                }).catch(() => {});
+            }
 
-        const suggestionsChannel = interaction.guild.channels.cache.get(SUGGESTIONS_CHANNEL_ID);
-        if (!suggestionsChannel || suggestionsChannel.type !== ChannelType.GuildText) {
-            return interaction.followUp({
-            embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel not found or is not a text channel.')],
-            ephemeral: true
-            }).catch(() => {});
-        }
+            const suggestionsChannel = interaction.guild.channels.cache.get(SUGGESTIONS_CHANNEL_ID);
+            if (!suggestionsChannel || suggestionsChannel.type !== ChannelType.GuildText) {
+                return interaction.followUp({
+                embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel not found or is not a text channel.')],
+                ephemeral: true
+                }).catch(() => {});
+            }
 
         try {
             const suggestionEmbed = new EmbedBuilder()

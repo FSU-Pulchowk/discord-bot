@@ -185,21 +185,6 @@ class PulchowkBot {
         }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
-            if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
-                const suggestCmd = this.client.commands.get('suggest');
-                if (suggestCmd && typeof suggestCmd.execute === 'function') {
-                    await interaction.deferUpdate().catch(e => console.error("Error deferring button interaction:", e));
-                    return;
-                } else {
-                    console.warn(`Suggest command not found or execute function missing for button interaction.`);
-                    if (!interaction.replied && !interaction.deferred) {
-                        await interaction.reply({ content: '❌ The suggestion command is misconfigured. Please contact an administrator.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured suggest command:", e));
-                    } else {
-                        await interaction.editReply({ content: '❌ The suggestion command is misconfigured. Please contact an administrator.' }).catch(e => console.error("Error editing reply for misconfigured suggest command:", e));
-                    }
-                }
-                return;
-            }
             if (customId.startsWith('verify_start_button_')) {
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
