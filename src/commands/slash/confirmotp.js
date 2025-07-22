@@ -6,7 +6,7 @@ import {
     TextInputStyle,
     EmbedBuilder,
     PermissionsBitField,
-    MessageFlags // Import MessageFlags for ephemeral replies
+    MessageFlags 
 } from 'discord.js';
 import { getOtpCache, saveVerifiedUser, saveBirthday } from './verify.js';
 import dotenv from 'dotenv';
@@ -223,7 +223,6 @@ export async function handleButtonInteraction(interaction) {
  * @param {import('discord.js').ModalSubmitInteraction} interaction - The modal submit interaction object.
  */
 export async function handleModalSubmit(interaction) {
-    // Defer the modal submission interaction immediately to prevent InteractionNotReplied errors
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const enteredOtp = interaction.fields.getTextInputValue('otpInput');

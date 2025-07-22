@@ -868,7 +868,6 @@ class PulchowkBot {
         let noticeChannel;
         try {
             noticeChannel = await this.client.channels.fetch(TARGET_NOTICE_CHANNEL_ID);
-            console.log(noticeChannel);
             if (!noticeChannel || !(noticeChannel.type === ChannelType.GuildText || noticeChannel.type === ChannelType.GuildAnnouncement)) {
                 console.error(`[Scheduler] Configured notice channel not found or is not a text/announcement channel.`);
                 return;

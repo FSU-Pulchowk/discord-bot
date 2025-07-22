@@ -35,11 +35,10 @@ export async function execute(interaction) {
         return interaction.reply({ content: 'This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
     }
 
-    // Defer the reply as fetching members and sending DMs can take time
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
-    const GUILD_ID = process.env.GUILD_ID; // The main guild ID where verification applies
+    const GUILD_ID = process.env.GUILD_ID; 
 
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
         return interaction.editReply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.' });
@@ -49,7 +48,7 @@ export async function execute(interaction) {
     }
 
     const customMessage = interaction.options.getString('message');
-    const targetUser = interaction.options.getUser('target_user'); // Get the target user if provided
+    const targetUser = interaction.options.getUser('target_user');
 
     let targetGuild;
     try {
@@ -61,7 +60,6 @@ export async function execute(interaction) {
 
     let members;
     try {
-        // Fetch all members to check their roles
         members = await targetGuild.members.fetch();
     } catch (error) {
         console.error(`Error fetching members for guild ${GUILD_ID}:`, error);
@@ -69,14 +67,11 @@ export async function execute(interaction) {
     }
 
     let unverifiedMembers = members.filter(member =>
-        !member.user.bot && // Exclude bots
-        !member.roles.cache.has(VERIFIED_ROLE_ID) // Include members without the verified role
+        !member.user.bot && 
+        !member.roles.cache.has(VERIFIED_ROLE_ID) 
     );
 
-    // --- START: Temporary filter for testing specific user ---
     if (targetUser) {
-        // For testing purposes, filter to only include the target user
-        // REMOVE this block for production use to send to all unverified members
         const specificUnverifiedMember = unverifiedMembers.find(member => member.user.id === targetUser.id);
         if (specificUnverifiedMember) {
             unverifiedMembers = new Map([[specificUnverifiedMember.id, specificUnverifiedMember]]);
@@ -85,7 +80,6 @@ export async function execute(interaction) {
             return interaction.editReply({ content: `⚠️ User ${targetUser.tag} is either a bot, already verified, or not found in the main guild. Cannot send reminder.` });
         }
     }
-    // --- END: Temporary filter for testing specific user ---
 
 
     if (unverifiedMembers.size === 0) {
@@ -97,7 +91,7 @@ export async function execute(interaction) {
     const failedUsers = [];
 
     const reminderEmbed = new EmbedBuilder()
-        .setColor('#FFA500') // Orange color for reminder
+        .setColor('#FFA500')
         .setTitle('🔔 Verification Reminder!')
         .setDescription('It looks like you haven\'t completed your verification yet. To gain full access to the server\'s channels, please complete the verification process.')
         .addFields(
@@ -110,17 +104,12 @@ export async function execute(interaction) {
         reminderEmbed.addFields({ name: 'Important Note:', value: customMessage });
     }
 
-    // Send DMs sequentially to avoid hitting Discord rate limits too hard
     for (const member of unverifiedMembers.values()) {
-        // Create the "Verify Your Account" button for EACH RECIPIENT
-        // The customId must contain the recipient's ID for correct handling in verify.js
         const verifyButton = new ButtonBuilder()
             .setCustomId(`verify_start_button_${member.user.id}`) // CORRECTED: Use member.user.id for the recipient
             .setLabel('Verify Your Account')
             .setStyle(ButtonStyle.Primary);
-
         const actionRow = new ActionRowBuilder().addComponents(verifyButton);
-
         try {
             await member.send({ embeds: [reminderEmbed], components: [actionRow] }); // Include the button in the DM
             sentCount++;
@@ -139,11 +128,10 @@ export async function execute(interaction) {
 
     await interaction.editReply({ content: replyContent });
 
-    // Optional: Log to an admin channel if configured
-    const ADMIN_LOG_CHANNEL_ID = process.env.ADMIN_LOG_CHANNEL_ID; // Add this to your .env
-    if (ADMIN_LOG_CHANNEL_ID && ADMIN_LOG_CHANNEL_ID !== 'YOUR_ADMIN_LOG_CHANNEL_ID_HERE') {
+    const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID; // Add this to your .env
+    if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
         try {
-            const adminLogChannel = await interaction.client.channels.fetch(ADMIN_LOG_CHANNEL_ID);
+            const adminLogChannel = await interaction.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
             if (adminLogChannel && (adminLogChannel.type === ChannelType.GuildText || adminLogChannel.type === ChannelType.GuildAnnouncement)) {
                 const logEmbed = new EmbedBuilder()
                     .setColor('#007BFF')
