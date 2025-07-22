@@ -160,6 +160,168 @@ async function initializeDatabase() {
                     });
                 });
 
+                db.run(`
+                    CREATE TABLE IF NOT EXISTS faqs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        question TEXT NOT NULL,
+                        answer TEXT NOT NULL,
+                        keywords TEXT,
+                        created_by TEXT NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(guild_id, question)
+                    )
+                `, (err) => {
+                    if (err) {
+                        console.error('Error creating faqs table:', err.message);
+                    } else {
+                        console.log('Faqs table checked/created.');
+                    }
+                });
+
+                // --- Add migration for 'keywords' column in 'faqs' table ---
+                db.all("PRAGMA table_info(faqs)", (err, columns) => {
+                    if (err) {
+                        console.error("Error checking faqs schema:", err.message);
+                        return;
+                    }
+                    const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
+                    if (!columnNames.includes("keywords")) {
+                        db.run("ALTER TABLE faqs ADD COLUMN keywords TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding keywords column to faqs:", alterErr.message);
+                            } else {
+                                console.log("Added keywords column to faqs.");
+                            }
+                        });
+                    }
+                    // --- Add migration for 'created_by' column in 'faqs' table ---
+                    if (!columnNames.includes("created_by")) {
+                        db.run("ALTER TABLE faqs ADD COLUMN created_by TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding created_by column to faqs:", alterErr.message);
+                            } else {
+                                console.log("Added created_by column to faqs.");
+                            }
+                        });
+                    }
+                });
+
+                db.run(`
+                    CREATE TABLE IF NOT EXISTS admin_tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        creatorId TEXT NOT NULL,
+                        taskDescription TEXT, -- Renamed from 'task_name' to match addTask.js
+                        description TEXT, 
+                        assigned_to TEXT,
+                        status TEXT DEFAULT 'pending',
+                        createdAt INTEGER, -- Changed to INTEGER to match Date.now() in addTask.js
+                        due_date DATETIME
+                    )
+                `, (err) => {
+                    if (err) {
+                        console.error('Error creating admin_tasks table:', err.message);
+                    } else {
+                        console.log('Admin tasks table checked/created.');
+                    }
+                });
+
+                // --- Add migration for 'creatorId' column in 'admin_tasks' table ---
+                db.all("PRAGMA table_info(admin_tasks)", (err, columns) => {
+                    if (err) {
+                        console.error("Error checking admin_tasks schema:", err.message);
+                        return;
+                    }
+                    const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
+                    if (!columnNames.includes("creatorId")) {
+                        db.run("ALTER TABLE admin_tasks ADD COLUMN creatorId TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding creatorId column to admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Added creatorId column to admin_tasks.");
+                            }
+                        });
+                    }
+                    // --- Add migration for 'taskDescription' column in 'admin_tasks' table ---
+                    if (!columnNames.includes("taskDescription")) {
+                        db.run("ALTER TABLE admin_tasks ADD COLUMN taskDescription TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding taskDescription column to admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Added taskDescription column to admin_tasks.");
+                            }
+                        });
+                    } else if (columnNames.includes("task_name") && !columnNames.includes("taskDescription")) {
+                        // If old 'task_name' exists but 'taskDescription' is missing, rename it
+                        db.run("ALTER TABLE admin_tasks RENAME COLUMN task_name TO taskDescription", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error renaming task_name to taskDescription in admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Renamed task_name to taskDescription in admin_tasks.");
+                            }
+                        });
+                    }
+
+                    // --- Add migration for 'createdAt' column in 'admin_tasks' table ---
+                    if (!columnNames.includes("createdAt")) {
+                        db.run("ALTER TABLE admin_tasks ADD COLUMN createdAt INTEGER", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding createdAt column to admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Added createdAt column to admin_tasks.");
+                                // Optional: If 'created_at' (snake_case) exists and 'createdAt' (camelCase) is new,
+                                // you might want to copy data from 'created_at' to 'createdAt'.
+                                // For now, we'll just add the column.
+                            }
+                        });
+                    } else if (columnNames.includes("created_at") && !columnNames.includes("createdAt")) {
+                        // If old 'created_at' exists but 'createdAt' is missing, rename it
+                        db.run("ALTER TABLE admin_tasks RENAME COLUMN created_at TO createdAt", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error renaming created_at to createdAt in admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Renamed created_at to createdAt in admin_tasks.");
+                            }
+                        });
+                    }
+
+                    // --- Add migration for guildId column in admin_tasks if it doesn't exist (from previous fix) ---
+                    if (!columnNames.includes("guildId") && columnNames.includes("guild_id")) {
+                        db.run("ALTER TABLE admin_tasks ADD COLUMN guildId TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding guildId to admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Added guildId column to admin_tasks.");
+                                db.run("UPDATE admin_tasks SET guildId = guild_id WHERE guildId IS NULL", (updateErr) => {
+                                    if (updateErr) {
+                                        console.error("Error copying data from guild_id to guildId:", updateErr.message);
+                                    } else {
+                                        console.log("Copied data from guild_id to guildId in admin_tasks.");
+                                    }
+                                });
+                            }
+                        });
+                    } else if (!columnNames.includes("guild_id") && columnNames.includes("guildId")) {
+                         db.run("ALTER TABLE admin_tasks ADD COLUMN guild_id TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding guild_id to admin_tasks:", alterErr.message);
+                            } else {
+                                console.log("Added guild_id column to admin_tasks.");
+                                db.run("UPDATE admin_tasks SET guild_id = guildId WHERE guild_id IS NULL", (updateErr) => {
+                                    if (updateErr) {
+                                        console.error("Error copying data from guildId to guild_id:", updateErr.message);
+                                    } else {
+                                        console.log("Copied data from guildId to guild_id in admin_tasks.");
+                                    }
+                                });
+                            }
+                        });
+                    } else if (!columnNames.includes("guild_id") && !columnNames.includes("guildId")) {
+                        console.warn("Neither 'guild_id' nor 'guildId' found in admin_tasks. This indicates a potential issue with initial table creation.");
+                    }
+                });
+
 
                 console.log('All database tables checked/created and schema updated.');
                 resolve(db);

@@ -3,7 +3,7 @@ import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v9';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
-import { initializeDatabase, db } from './database.js';
+import { initializeDatabase, db } from './database.js'; // Assuming initializeDatabase and db are exported from database.js
 import { emailService } from './services/emailService.js';
 import { scrapeLatestNotice } from './services/scraper.js'; // Ensure this path is correct
 import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
@@ -40,7 +40,7 @@ async function writeServiceAccountKey() {
 class PulchowkBot {
     constructor(token, dbInstance) {
         this.token = token;
-        this.db = dbInstance;
+        // The dbInstance passed here is the actual database connection
         this.client = new Client({
             intents: [
                 IntentsBitField.Flags.Guilds,
@@ -59,6 +59,9 @@ class PulchowkBot {
                 Partials.GuildMember
             ]
         });
+
+        // Assign the dbInstance to the client object
+        this.client.db = dbInstance; 
 
         this.client.commands = new Collection();
         this.commandFiles = [];
@@ -112,7 +115,6 @@ class PulchowkBot {
         this.client.on(Events.MessageReactionAdd, this._onMessageReactionAdd.bind(this));
         this.client.on(Events.MessageReactionRemove, this._onMessageReactionRemove.bind(this));
 
-        // Add more detailed Discord.js client event listeners for debugging
         this.client.on(Events.Error, error => {
             console.error('Discord.js Client Error:', error);
         });
@@ -143,7 +145,7 @@ class PulchowkBot {
 
     async _loadActiveVoiceSessions() {
         return new Promise((resolve, reject) => {
-            this.db.all(`SELECT user_id, guild_id, channel_id, join_time FROM active_voice_sessions`, [], (err, rows) => {
+            this.client.db.all(`SELECT user_id, guild_id, channel_id, join_time FROM active_voice_sessions`, [], (err, rows) => {
                 if (err) {
                     console.error('Error loading active voice sessions from DB:', err.message);
                     return reject(err);
@@ -183,6 +185,21 @@ class PulchowkBot {
         }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
+            if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
+                const suggestCmd = this.client.commands.get('suggest');
+                if (suggestCmd && typeof suggestCmd.execute === 'function') {
+                    await interaction.deferUpdate().catch(e => console.error("Error deferring button interaction:", e));
+                    return;
+                } else {
+                    console.warn(`Suggest command not found or execute function missing for button interaction.`);
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: '❌ The suggestion command is misconfigured. Please contact an administrator.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured suggest command:", e));
+                    } else {
+                        await interaction.editReply({ content: '❌ The suggestion command is misconfigured. Please contact an administrator.' }).catch(e => console.error("Error editing reply for misconfigured suggest command:", e));
+                    }
+                }
+                return;
+            }
             if (customId.startsWith('verify_start_button_')) {
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
@@ -246,7 +263,7 @@ class PulchowkBot {
                         await setupFSUCommand._performSetupLogic(interaction);
                     } else if (customId.startsWith('cancel_setup_fsu_')) {
                         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                            return interaction.editReply({ content: 'You do not have permission to cancel this action.' });
+                            return interaction.editReply({ content: '❌ FSU server setup cancelled.', components: [], embeds: [] });
                         }
                         await interaction.editReply({ content: '❌ FSU server setup cancelled.', components: [], embeds: [] });
                     }
@@ -295,11 +312,11 @@ class PulchowkBot {
                     await interaction.reply({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] });
                 }
                 return;
-            } else if (customId.startsWith('deny_reason_modal_')) {
+            } else if (interaction.customId.startsWith('deny_reason_modal_')) { // Corrected customId check
                 const suggestionId = interaction.customId.split('_')[3];
                 const reason = interaction.fields.getTextInputValue('denyReasonInput');
                 await this._processSuggestionDenial(interaction, suggestionId, reason);
-            } else if (customId.startsWith('delete_reason_modal_')) {
+            } else if (interaction.customId.startsWith('delete_reason_modal_')) { // Corrected customId check
                 const suggestionId = interaction.customId.split('_')[3];
                 const reason = interaction.fields.getTextInputValue('deleteReasonInput');
                 await this._processSuggestionDelete(interaction, suggestionId, reason);
@@ -315,7 +332,8 @@ class PulchowkBot {
         try {
             // First, attempt to send farewell message to a designated channel (more reliable than DM)
             const row = await new Promise((resolve, reject) => {
-                this.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], (err, result) => {
+                // Use this.client.db here
+                this.client.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], (err, result) => {
                     if (err) reject(err);
                     else resolve(result);
                 });
@@ -361,7 +379,8 @@ class PulchowkBot {
         const currentTime = Date.now();
 
         if (!oldState.channelId && newState.channelId) {
-            this.db.run(`INSERT OR REPLACE INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
+            // Use this.client.db here
+            this.client.db.run(`INSERT OR REPLACE INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
                 [userId, guildId, newState.channelId, currentTime],
                 (err) => {
                     if (err) console.error('Error inserting active voice session:', err.message);
@@ -373,7 +392,8 @@ class PulchowkBot {
             );
         }
         else if (oldState.channelId && (!newState.channelId || oldState.channelId !== newState.channelId)) {
-            this.db.get(`SELECT join_time FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], async (err, row) => {
+            // Use this.client.db here
+            this.client.db.get(`SELECT join_time FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], async (err, row) => {
                 if (err) {
                     console.error('Error fetching active voice session for update:', err.message);
                     return;
@@ -383,7 +403,8 @@ class PulchowkBot {
                     const durationMinutes = Math.floor(durationMs / (1000 * 60));
 
                     if (durationMinutes > 0) {
-                        this.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 0, ?)
+                        // Use this.client.db here
+                        this.client.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 0, ?)
                                      ON CONFLICT(user_id, guild_id) DO UPDATE SET voice_time_minutes = voice_time_minutes + ?`,
                             [userId, guildId, durationMinutes, durationMinutes],
                             (updateErr) => {
@@ -392,7 +413,8 @@ class PulchowkBot {
                             }
                         );
                     }
-                    this.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (deleteErr) => {
+                    // Use this.client.db here
+                    this.client.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (deleteErr) => {
                         if (deleteErr) console.error('Error deleting active voice session:', deleteErr.message);
                         else console.log(`[Voice] Session for ${oldState.member.user.tag} ended/moved.`);
                     });
@@ -401,7 +423,8 @@ class PulchowkBot {
                 }
                 this.voiceStates.delete(userId);
                 if (newState.channelId) {
-                    this.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
+                    // Use this.client.db here
+                    this.client.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
                         [userId, guildId, newState.channelId, currentTime],
                         (err) => {
                             if (err) console.error('Error inserting new active voice session after move:', err.message);
@@ -431,7 +454,8 @@ class PulchowkBot {
         const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
         const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
 
-        this.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
+        // Use this.client.db here
+        this.client.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
             if (err) {
                 console.error('Error fetching welcome config:', err.message);
                 return;
@@ -444,7 +468,8 @@ class PulchowkBot {
             let dmEmbed;
             let dmComponents = [];
 
-            this.db.get(`SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`, [member.user.id, member.guild.id], async (err, verifiedRow) => {
+            // Use this.client.db here
+            this.client.db.get(`SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`, [member.user.id, member.guild.id], async (err, verifiedRow) => {
                 if (err) {
                     console.error('Error checking verified_users table:', err.message);
                 }
@@ -539,7 +564,8 @@ class PulchowkBot {
         }
         if (user.bot || !reaction.message.guild) return;
 
-        this.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
+        // Use this.client.db here
+        this.client.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
             [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
             async (err, row) => {
                 if (err) {
@@ -569,7 +595,8 @@ class PulchowkBot {
                             }
                         } else {
                             console.warn(`Configured role ${row.role_id} for reaction role not found in guild ${reaction.message.guild.name}. Deleting invalid entry.`);
-                            this.db.run(`DELETE FROM reaction_roles WHERE role_id = ? AND guild_id = ?`, [row.role_id, reaction.message.guild.id]);
+                            // Use this.client.db here
+                            this.client.db.run(`DELETE FROM reaction_roles WHERE role_id = ? AND guild_id = ?`, [row.role_id, reaction.message.guild.id]);
                         }
                     }
                 }
@@ -581,7 +608,8 @@ class PulchowkBot {
             const message = await reaction.message.fetch().catch(e => console.error('Error fetching suggestion message:', e));
             if (!message) return;
 
-            this.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
+            // Use this.client.db here
+            this.client.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
                 [message.id, message.guild.id],
                 async (err, row) => {
                     if (err) {
@@ -614,7 +642,8 @@ class PulchowkBot {
                             newDownvotes++;
                         }
 
-                        this.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
+                        // Use this.client.db here
+                        this.client.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
                             [newUpvotes, newDownvotes, row.id],
                             (updateErr) => {
                                 if (updateErr) {
@@ -645,7 +674,8 @@ class PulchowkBot {
         }
         if (user.bot || !reaction.message.guild) return;
 
-        this.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
+        // Use this.client.db here
+        this.client.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
             [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
             async (err, row) => {
                 if (err) {
@@ -684,7 +714,8 @@ class PulchowkBot {
             const message = await reaction.message.fetch().catch(e => console.error('Error fetching suggestion message:', e));
             if (!message) return;
 
-            this.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
+            // Use this.client.db here
+            this.client.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
                 [message.id, message.guild.id],
                 async (err, row) => {
                     if (err) {
@@ -703,7 +734,8 @@ class PulchowkBot {
                             newDownvotes = Math.max(0, newDownvotes - 1);
                         }
 
-                        this.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
+                        // Use this.client.db here
+                        this.client.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
                             [newUpvotes, newDownvotes, row.id],
                             (updateErr) => {
                                 if (updateErr) {
@@ -723,6 +755,81 @@ class PulchowkBot {
         }
     }
 
+    async _handleSuggestionDelete(interaction) {
+        const customIdParts = interaction.customId.split('_');
+        const suggestionId = customIdParts[2];
+        const db = this.client.db;
+        const guild = interaction.guild;
+
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ ephemeral: true });
+        }
+
+        try {
+            const suggestion = await new Promise((resolve, reject) => {
+                db.get(`SELECT user_id, message_id FROM suggestions WHERE id = ? AND guild_id = ?`, [suggestionId, guild.id], (err, row) => {
+                    if (err) {
+                        console.error('Error fetching suggestion to delete:', err.message);
+                        reject(new Error('An error occurred while trying to find the suggestion.'));
+                    } else {
+                        resolve(row);
+                    }
+                });
+            });
+            if (!suggestion) {
+                return interaction.editReply({ content: '❌ This suggestion could not be found. It might have already been deleted.' });
+            }
+            const hasAdminPerms = interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages) || this.developers.includes(interaction.user.id);
+            if (interaction.user.id !== suggestion.user_id && !hasAdminPerms) {
+                return interaction.editReply({ content: '🚫 You do not have permission to delete this suggestion.' });
+            }
+            const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
+            if (!SUGGESTIONS_CHANNEL_ID) {
+                console.error('SUGGESTIONS_CHANNEL_ID is not set in the environment variables.');
+                return interaction.editReply({ content: '❌ The suggestions channel is not configured correctly.' });
+            }
+
+            const suggestionsChannel = await guild.channels.fetch(SUGGESTIONS_CHANNEL_ID).catch(() => null);
+            if (suggestionsChannel) {
+                await suggestionsChannel.messages.fetch(suggestion.message_id).then(msg => msg.delete()).catch(() => {
+                    console.warn(`Suggestion message ${suggestion.message_id} not found or could not be deleted.`);
+                });
+            }
+
+            await new Promise((resolve, reject) => {
+                db.run(`DELETE FROM suggestions WHERE id = ?`, [suggestionId], (err) => {
+                    if (err) {
+                        console.error('Error deleting suggestion from DB:', err.message);
+                        reject(new Error('An error occurred while deleting the suggestion from the database.'));
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+            await interaction.editReply({ content: `✅ Suggestion #${suggestionId} has been successfully deleted.` });
+            const logEmbed = new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('Suggestion Deleted')
+                .addFields(
+                    { name: 'Suggestion ID', value: suggestionId, inline: true },
+                    { name: 'Deleted By', value: interaction.user.tag, inline: true },
+                    { name: 'Original Suggester ID', value: suggestion.user_id, inline: true }
+                )
+                .setTimestamp();
+            const logChannelId = process.env.ADMIN_LOG_CHANNEL_ID;
+            if(logChannelId) {
+               const logChannel = await guild.channels.fetch(logChannelId).catch(() => null);
+               if(logChannel) logChannel.send({ embeds: [logEmbed] });
+            }
+        } catch (error) {
+            console.error('Error during suggestion deletion process:', error);
+            if (!interaction.replied) {
+            await interaction.editReply({ content: `❌ A critical error occurred: ${error.message}` });
+            }
+        }
+    }
+
+
     async _handleAntiSpam(message) {
         if (!message.guild) {
             return;
@@ -730,7 +837,7 @@ class PulchowkBot {
         const userId = message.author.id;
         const guildId = message.guild.id;
 
-        this.db.get(`SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold FROM anti_spam_configs WHERE guild_id = ?`, [guildId], async (err, config) => {
+        this.client.db.get(`SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold FROM anti_spam_configs WHERE guild_id = ?`, [guildId], async (err, config) => {
             if (err) {
                 console.error('Error fetching anti-spam config:', err.message);
                 return;
@@ -800,7 +907,7 @@ class PulchowkBot {
         const guildId = message.guild.id;
         const now = Date.now();
 
-        this.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, last_message_at) VALUES (?, ?, 1, ?)
+        this.client.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, last_message_at) VALUES (?, ?, 1, ?)
                      ON CONFLICT(user_id, guild_id) DO UPDATE SET messages_sent = messages_sent + 1, last_message_at = ?`,
             [userId, guildId, now, now],
             (err) => {
@@ -936,8 +1043,9 @@ class PulchowkBot {
                     continue;
                 }
 
+                // Use this.client.db here
                 const row = await new Promise((resolve, reject) => {
-                    this.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
+                    this.client.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
                         if (err) reject(err);
                         else resolve(result);
                     });
@@ -1079,8 +1187,9 @@ class PulchowkBot {
                         }
                     }
                     
+                    // Use this.client.db here
                     await new Promise((resolve, reject) => {
-                        this.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
+                        this.client.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
                             [notice.title, notice.link, notice.date, Date.now()],
                             (insertErr) => {
                                 if (insertErr) {
@@ -1124,7 +1233,8 @@ class PulchowkBot {
         let announcementChannel;
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
-            if (!announcementChannel || (announcementChannel.type === ChannelType.GuildText || announcementChannel.type === ChannelType.GuildAnnouncement)) {
+            // Corrected condition: it should be GuildText or GuildAnnouncement
+            if (!announcementChannel || !(announcementChannel.type === ChannelType.GuildText || announcementChannel.type === ChannelType.GuildAnnouncement)) {
                 console.error(`[Scheduler] Configured birthday channel not found or is not a text/announcement channel.`);
                 return;
             }
@@ -1140,8 +1250,9 @@ class PulchowkBot {
 
         for (const [guildId, guild] of guilds) {
             try {
+                // Use this.client.db here
                 const rows = await new Promise((resolve, reject) => {
-                    this.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
+                    this.client.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
                         [guild.id, currentMonth, currentDay],
                         (err, resultRows) => {
                             if (err) {
@@ -1216,8 +1327,8 @@ class PulchowkBot {
 async function main() {
     try {
         await writeServiceAccountKey();
-        const database = await initializeDatabase();
-        const bot = new PulchowkBot(process.env.BOT_TOKEN, database);
+        const database = await initializeDatabase(); 
+        const bot = new PulchowkBot(process.env.BOT_TOKEN, database); 
         bot.start();
     } catch (error) {
         console.error('Failed to start bot:', error);

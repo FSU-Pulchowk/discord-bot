@@ -16,6 +16,11 @@ export async function execute(interaction) {
         return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
     }
 
+    if (!interaction.client.db) {
+        console.error('Database connection not found on client. Please ensure it is initialized.');
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Database connection not established. Please contact an administrator.')], ephemeral: true });
+    }
+
     const db = interaction.client.db;
     let currentPage = 0; 
     await interaction.deferReply({ ephemeral: true });
@@ -73,18 +78,17 @@ export async function execute(interaction) {
                         .setCustomId(`gotverified_prev_${page}`)
                         .setLabel('Previous')
                         .setStyle(ButtonStyle.Primary)
-                        .setDisabled(page === 0),
+                        .setDisabled(page === 0), 
                     new ButtonBuilder()
                         .setCustomId(`gotverified_next_${page}`)
                         .setLabel('Next')
                         .setStyle(ButtonStyle.Primary)
-                        .setDisabled(page === totalPages - 1)
+                        .setDisabled(page === totalPages - 1) 
                 );
             };
 
-            // Send the first page
             await interaction.editReply({
-                embeds: [generateEmbed(currentPage)],
+                embeds: [await generateEmbed(currentPage)],
                 components: [generateButtons(currentPage)]
             });
 
@@ -105,7 +109,7 @@ export async function execute(interaction) {
                 }
 
                 await i.update({
-                    embeds: [generateEmbed(currentPage)],
+                    embeds: [await generateEmbed(currentPage)], // Await the embed generation
                     components: [generateButtons(currentPage)]
                 });
             });

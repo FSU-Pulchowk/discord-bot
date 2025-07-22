@@ -12,6 +12,7 @@ export const data = new SlashCommandBuilder()
             .setDescription('Reason for approving the suggestion (optional)')
             .setRequired(false))
     .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild); 
+
 export async function execute(interaction) {
     if (!interaction.guild) {
         return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
@@ -29,6 +30,7 @@ export async function execute(interaction) {
     const db = interaction.client.db;
     const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID || 'YOUR_SUGGESTIONS_CHANNEL_ID_HERE';
 
+    // FIX: Added missing backticks to the SQL query string
     db.get(`SELECT * FROM suggestions WHERE id = ? AND guild_id = ?`, [suggestionId, guildId], async (err, row) => {
         if (err) {
             console.error('Error fetching suggestion:', err.message);

@@ -1,5 +1,4 @@
 import { SlashCommandBuilder, EmbedBuilder, PermissionsBitField, ChannelType } from 'discord.js';
-
 export const data = new SlashCommandBuilder()
     .setName('listsuggestions')
     .setDescription('Lists suggestions, filterable by status.')
@@ -14,7 +13,7 @@ export const data = new SlashCommandBuilder()
                 { name: 'Implemented', value: 'implemented' },
                 { name: 'All', value: 'all' }
             ))
-    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild); // Restricted to admins/guild managers
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild); 
 
 export async function execute(interaction) {
     if (!interaction.guild) {
@@ -30,14 +29,13 @@ export async function execute(interaction) {
     if (statusFilter === 'all') {
         queryStatus = '%'; 
     } else if (!['pending', 'approved', 'denied', 'implemented'].includes(statusFilter)) {
-        // This case should ideally not be hit due to choices, but kept for robustness
         return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription("❌ Invalid status. Use `pending`, `approved`, `denied`, `implemented`, or `all`.")], ephemeral: true });
     }
 
     const db = interaction.client.db;
     const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID || 'YOUR_SUGGESTIONS_CHANNEL_ID_HERE';
 
-    const query = `SELECT * FROM suggestions WHERE guild_id = ? AND status LIKE ? ORDER BY created_at DESC`;
+    const query = `SELECT * FROM suggestions WHERE guild_id = ? AND status LIKE ? ORDER BY submitted_at DESC`;
     db.all(query, [interaction.guild.id, queryStatus], async (err, rows) => {
         if (err) {
             console.error('Error fetching suggestions:', err.message);
@@ -76,7 +74,7 @@ export async function execute(interaction) {
                 }
 
                 let fieldText = `"${row.suggestion_text}"\n` +
-                               `> Suggested by: ${suggesterTag} on ${new Date(row.created_at).toLocaleDateString()}\n` +
+                               `> Suggested by: ${suggesterTag} on ${new Date(row.submitted_at).toLocaleDateString()}\n` +
                                `> Votes: 👍 ${row.upvotes || 0} / 👎 ${row.downvotes || 0}`;
                 
                 if (row.reviewed_at) {
@@ -85,7 +83,7 @@ export async function execute(interaction) {
                 if (row.reason && (row.status === 'approved' || row.status === 'denied')) {
                     fieldText += `\n> Reason: ${row.reason}`;
                 }
-                if (row.message_id && SUGGESTIONS_CHANNEL_ID !== 'YOUR_SUGGESTIONS_CHANNEL_ID_HERE') { // Check against string literal, not process.env
+                if (row.message_id && SUGGESTIONS_CHANNEL_ID !== 'YOUR_SUGGESTIONS_CHANNEL_ID_HERE') {
                     fieldText += `\n> [View Original Suggestion](https://discord.com/channels/${interaction.guild.id}/${SUGGESTIONS_CHANNEL_ID}/${row.message_id})`;
                 }
 
@@ -96,6 +94,6 @@ export async function execute(interaction) {
             }
             embed.addFields(suggestionFields);
         }
-        interaction.reply({ embeds: [embed] }); // Can be ephemeral or public
+        interaction.reply({ embeds: [embed] });
     });
 }

@@ -24,7 +24,7 @@ export async function execute(interaction) {
 
     const db = interaction.client.db;
 
-    db.run(`INSERT INTO admin_tasks (guildId, creatorId, taskDescription, createdAt, status) VALUES (?, ?, ?, ?, ?)`,
+    db.run(`INSERT INTO admin_tasks (guild_id, creatorId, taskDescription, createdAt, status) VALUES (?, ?, ?, ?, ?)`,
         [guildId, userId, taskDescription, Date.now(), 'pending'],
         function(err) {
             if (err) {
