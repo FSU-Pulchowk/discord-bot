@@ -1,23 +1,36 @@
-import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, Events } from 'discord.js';
+import { Client, Collection, IntentsBitField, EmbedBuilder, PermissionsBitField, ChannelType, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, Events, MessageFlags } from 'discord.js';
 import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v9';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
 import { initializeDatabase, db } from './database.js';
 import { emailService } from './services/emailService.js';
-import { scrapeLatestNotice } from './services/scraper.js';
+import { scrapeLatestNotice } from './services/scraper.js'; // Ensure this path is correct
 import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
 import { fromPath } from 'pdf2pic';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
+import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
 
+dotenv.config();
+
+// Global handler for unhandled promise rejections
+process.on('unhandledRejection', error => {
+    console.error('Unhandled promise rejection (this caused the bot to crash):', error);
+    // Optionally, you can send a message to an admin channel here
+    // For example:
+    // client.channels.cache.get('ADMIN_LOG_CHANNEL_ID').send(`Unhandled Rejection: ${error.message}`);
+    // process.exit(1); // You might want to remove this line during debugging to keep the bot running
+});
+
+
 async function writeServiceAccountKey() {
     const b64 = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_B64;
     if (!b64) {
-        console.warn('No GOOGLE_SERVICE_ACCOUNT_KEY_B64 env var found');
+        console.warn('No GOOGLE_SERVICE_ACCOUNT_KEY_B64 env var found. Google Calendar features might be limited.');
         return;
     }
     try {
@@ -25,11 +38,9 @@ async function writeServiceAccountKey() {
         await fsPromises.writeFile('./src/service_account_key.json', decoded);
         console.log('Service account key saved.');
     } catch (error) {
-        console.error('Failed to write service account key:', error);
+        console.error('Error writing service account key:', error);
     }
 }
-dotenv.config()
-await writeServiceAccountKey();
 
 class PulchowkBot {
     constructor(token, dbInstance) {
@@ -42,75 +53,96 @@ class PulchowkBot {
                 IntentsBitField.Flags.GuildMessages,
                 IntentsBitField.Flags.MessageContent,
                 IntentsBitField.Flags.GuildVoiceStates,
-                IntentsBitField.Flags.GuildMessageReactions,
                 IntentsBitField.Flags.DirectMessages,
+                IntentsBitField.Flags.GuildMessageReactions
             ],
-            partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.GuildMember, Partials.User],
+            partials: [
+                Partials.Channel,
+                Partials.Message,
+                Partials.Reaction,
+                Partials.User,
+                Partials.GuildMember
+            ]
         });
-        this.client.db = this.db;
+
         this.client.commands = new Collection();
+        this.commandFiles = [];
+        this.developers = process.env.DEVELOPER_IDS ? process.env.DEVELOPER_IDS.split(',') : [];
+
         this.spamMap = new Map();
         this.spamWarnings = new Map();
         this.voiceStates = new Map();
 
-        this._setupEventListeners();
+        this._initializeCommands();
+        this._registerEventListeners();
+        this._scheduleJobs();
     }
 
-    async _setupEventListeners() {
-        this.client.once('ready', () => this._onReady());
-        this.client.on(Events.InteractionCreate, (interaction) => this._onInteractionCreate(interaction));
-        this.client.on('messageCreate', (message) => this._onMessageCreate(message));
-        this.client.on('guildMemberAdd', (member) => this._onGuildMemberAdd(member));
-        this.client.on('guildMemberRemove', (member) => this._onGuildMemberRemove(member));
-        this.client.on('messageReactionAdd', (reaction, user) => this._onMessageReactionAdd(reaction, user));
-        this.client.on('messageReactionRemove', (reaction, user) => this._onMessageReactionRemove(reaction, user));
-        this.client.on('voiceStateUpdate', (oldState, newState) => this._onVoiceStateUpdate(oldState, newState));
+    _initializeCommands() {
+        const commandsPath = path.join(process.cwd(), 'src', 'commands', 'slash');
+        try {
+            const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+            for (const file of commandFiles) {
+                const filePath = path.join(commandsPath, file);
+                import(filePath).then(command => {
+                    if (command.data && command.execute) {
+                        this.client.commands.set(command.data.name, command);
+                        this.commandFiles.push(command.data.toJSON());
+                        console.log(`Loaded command: ${command.data.name}`);
+                    } else {
+                        console.warn(`The command at ${filePath} is missing a required "data" or "execute" property.`);
+                    }
+                }).catch(error => {
+                    console.error(`Error loading command from ${filePath}:`, error);
+                });
+            }
+        } catch (error) {
+            console.error('Error reading commands directory:', error);
+        }
     }
 
-    async _onReady() {
-        console.log(`✅ Logged in as ${this.client.user.tag}`);
-        await initializeGoogleCalendarClient();
-        await this._loadActiveVoiceSessions();
-        this._scheduleDailyTasks();
-        await this._loadSlashCommands();
-    }
-
-    async _loadSlashCommands() {
-        const slashCommandsPath = path.join(process.cwd(), 'src', 'commands', 'slash');
-        const slashCommandFiles = fsPromises.readdir(slashCommandsPath).catch(e => {
-            console.error(`Error reading slash commands directory ${slashCommandsPath}:`, e);
-            return [];
+    _registerEventListeners() {
+        this.client.once(Events.ClientReady, c => {
+            console.log(`Ready! Logged in as ${c.user.tag}`);
+            this._registerSlashCommands();
+            initializeGoogleCalendarClient();
+            this._loadActiveVoiceSessions();
         });
 
-        const commandsForDiscordAPI = [];
+        this.client.on(Events.InteractionCreate, this._onInteractionCreate.bind(this));
+        this.client.on(Events.VoiceStateUpdate, this._onVoiceStateUpdate.bind(this));
+        this.client.on(Events.MessageCreate, this._onMessageCreate.bind(this));
+        this.client.on(Events.GuildMemberAdd, this._onGuildMemberAdd.bind(this));
+        this.client.on(Events.GuildMemberRemove, this._onGuildMemberRemove.bind(this));
+        this.client.on(Events.MessageReactionAdd, this._onMessageReactionAdd.bind(this));
+        this.client.on(Events.MessageReactionRemove, this._onMessageReactionRemove.bind(this));
 
-        for (const file of await slashCommandFiles) {
-            if (!file.endsWith('.js')) continue;
-            const filePath = path.join(slashCommandsPath, file);
-            try {
-                const command = await import(filePath);
-                if ('data' in command && 'execute' in command) {
-                    this.client.commands.set(command.data.name, command);
-                    commandsForDiscordAPI.push(command.data.toJSON());
-                } else {
-                    console.warn(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-                }
-            } catch (error) {
-                console.error(`Error loading slash command from ${filePath}:`, error);
-            }
-        }
-        console.log(`[INFO] Loaded ${this.client.commands.size} slash commands.`);
+        // Add more detailed Discord.js client event listeners for debugging
+        this.client.on(Events.Error, error => {
+            console.error('Discord.js Client Error:', error);
+        });
+        this.client.on(Events.ShardDisconnect, (event, id) => {
+            console.warn(`Discord.js Shard ${id} Disconnected:`, event);
+        });
+        this.client.on(Events.ShardReconnecting, (id) => {
+            console.log(`Discord.js Shard ${id} Reconnecting...`);
+        });
+        this.client.on(Events.Warn, info => {
+            console.warn('Discord.js Client Warning:', info);
+        });
+    }
+
+    async _registerSlashCommands() {
         const rest = new REST({ version: '10' }).setToken(this.token);
-
         try {
-            console.log('Started refreshing application (/) commands.');
-            await rest.put(
+            console.log(`Started refreshing ${this.commandFiles.length} application (/) commands.`);
+            const data = await rest.put(
                 Routes.applicationCommands(this.client.user.id),
-                { body: commandsForDiscordAPI },
+                { body: this.commandFiles },
             );
-            console.log('Successfully reloaded application (/) commands globally.');
+            console.log(`Successfully reloaded ${data.length} application (/) commands.`);
         } catch (error) {
-            console.error('Error refreshing application (/) commands:', error);
+            console.error('Failed to register slash commands:', error);
         }
     }
 
@@ -139,7 +171,7 @@ class PulchowkBot {
             const command = this.client.commands.get(interaction.commandName);
             if (!command) {
                 console.warn(`Received interaction for unknown slash command: ${interaction.commandName}`);
-                await interaction.reply({ content: '❌ Unknown command. It might have been removed or is not deployed correctly.', ephemeral: true }).catch(e => console.error("Error replying to unknown command:", e));
+                await interaction.reply({ content: '❌ Unknown command. It might have been removed or is not deployed correctly.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to unknown command:", e));
                 return;
             }
 
@@ -148,47 +180,87 @@ class PulchowkBot {
             } catch (error) {
                 console.error(`Error executing slash command ${interaction.commandName}:`, error);
                 if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({ content: '❌ There was an error while executing this command!', ephemeral: true });
+                    await interaction.followUp({ content: '❌ There was an error while executing this command!', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error sending follow-up:", e));
                 } else {
-                    await interaction.reply({ content: '❌ There was an error while executing this command!', ephemeral: true });
+                    await interaction.reply({ content: '❌ There was an error while executing this command!', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error sending reply:", e));
                 }
             }
         }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
-            if (customId.startsWith('confirm_nuke_') || customId.startsWith('cancel_nuke_')) {
-                const nukeCommand = this.client.commands.get('nuke');
-                if (nukeCommand && typeof nukeCommand._nukeServerLogic === 'function') {
-                    if (customId.startsWith('confirm_nuke_')) {
-                        if (interaction.user.id !== interaction.guild.ownerId) {
-                            return interaction.reply({ content: '❌ Only the server owner can confirm this action.', ephemeral: true });
+
+            // Handle buttons that immediately show a modal first.
+            // These buttons should NOT be deferred here, as showModal is an initial response.
+            if (customId.startsWith('verify_start_button_')) {
+                const verifyCmd = this.client.commands.get('verify');
+                if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
+                    try {
+                        await verifyCmd.handleButtonInteraction(interaction);
+                    } catch (error) {
+                        console.error(`Error handling verify_start_button interaction:`, error);
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.reply({ content: '❌ An error occurred with the verification button. Please try the `/verify` command directly.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to verify button error:", e));
+                        } else {
+                            await interaction.editReply({ content: '❌ An error occurred with the verification button. Please try the `/verify` command directly.' }).catch(e => console.error("Error editing reply for verify button error:", e));
                         }
-                        await interaction.update({ content: '💣 Beginning server nuke... This may take a moment.', components: [], embeds: [] });
-                        await nukeCommand._nukeServerLogic(interaction);
-                    } else if (customId.startsWith('cancel_nuke_')) {
-                        if (interaction.user.id !== interaction.guild.ownerId) {
-                            return interaction.reply({ content: '❌ Only the server owner can cancel this action.', ephemeral: true });
-                        }
-                        await interaction.update({ content: '❌ Server nuke cancelled.', components: [], embeds: [] });
+                    }
+                } else {
+                    console.warn(`verify command not found or handleButtonInteraction function missing for button interaction.`);
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: '❌ The verification command is misconfigured. Please contact an administrator.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured verify command:", e));
+                    } else {
+                        await interaction.editReply({ content: '❌ The verification command is misconfigured. Please contact an administrator.' }).catch(e => console.error("Error editing reply for misconfigured verify command:", e));
                     }
                 }
                 return;
             }
-            else if (customId.startsWith('confirm_setup_fsu_') || customId.startsWith('cancel_setup_fsu_')) {
+            else if (customId.startsWith('confirm_otp_button_')) {
+                const confirmOtpCmd = this.client.commands.get('confirmotp');
+                if (confirmOtpCmd && typeof confirmOtpCmd.handleButtonInteraction === 'function') {
+                    try {
+                        await confirmOtpCmd.handleButtonInteraction(interaction);
+                    } catch (error) {
+                        console.error(`Error handling confirm_otp_button interaction:`, error);
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.reply({ content: '❌ An error occurred with the OTP confirmation button.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to confirmotp button error:", e));
+                        } else {
+                            await interaction.editReply({ content: '❌ An error occurred with the OTP confirmation button. Please try the `/confirmotp` command directly.' }).catch(e => console.error("Error editing reply for confirmotp button error:", e));
+                        }
+                    }
+                } else {
+                    console.warn(`confirmotp command not found or handleButtonInteraction function missing for button interaction.`);
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: '❌ The OTP confirmation command is misconfigured. Please contact an administrator.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured confirmotp command:", e));
+                    } else {
+                        await interaction.editReply({ content: '❌ The OTP confirmation command is misconfigured. Please contact an administrator.' }).catch(e => console.error("Error editing reply for misconfigured confirmotp command:", e));
+                    }
+                }
+                return;
+            }
+
+            // For all other buttons, defer the reply.
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }).catch(e => {
+                console.error("Error deferring button interaction:", e);
+                return;
+            });
+
+            if (customId.startsWith('confirm_setup_fsu_') || customId.startsWith('cancel_setup_fsu_')) {
                 const setupFSUCommand = this.client.commands.get('setupfsu');
                 if (setupFSUCommand && typeof setupFSUCommand._performSetupLogic === 'function') {
                     if (customId.startsWith('confirm_setup_fsu_')) {
                         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                            return interaction.reply({ content: 'You do not have permission to confirm this action.', ephemeral: true });
+                            return interaction.editReply({ content: 'You do not have permission to confirm this action.' });
                         }
-                        await interaction.update({ content: '🔧 Beginning FSU server setup... This may take a moment.', components: [], embeds: [] });
+                        await interaction.editReply({ content: '🔧 Beginning FSU server setup... This may take a moment.', components: [], embeds: [] });
                         await setupFSUCommand._performSetupLogic(interaction);
                     } else if (customId.startsWith('cancel_setup_fsu_')) {
                         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                            return interaction.reply({ content: 'You do not have permission to cancel this action.', ephemeral: true });
+                            return interaction.editReply({ content: 'You do not have permission to cancel this action.' });
                         }
-                        await interaction.update({ content: '❌ FSU server setup cancelled.', components: [], embeds: [] });
+                        await interaction.editReply({ content: '❌ FSU server setup cancelled.', components: [], embeds: [] });
                     }
+                } else {
+                    await interaction.editReply({ content: '❌ Setup command not found or is misconfigured.' });
                 }
                 return;
             }
@@ -196,24 +268,21 @@ class PulchowkBot {
                 const gotVerifiedCommand = this.client.commands.get('gotverified');
                 if (gotVerifiedCommand && typeof gotVerifiedCommand.execute === 'function') {
                     await gotVerifiedCommand.execute(interaction);
-                }
-                return;
-            }
-            else if (customId.startsWith('confirm_otp_button_')) {
-                const verifyCmd = this.client.commands.get('verify'); 
-                if (verifyCmd && typeof verifyCmd.execute === 'function') { 
-                    await verifyCmd.execute(interaction);
                 } else {
-                    console.warn(`Verify command not found or execute function missing for button interaction.`);
-                    await interaction.reply({ content: '❌ An error occurred with the verification button. Please try the `/verify` command directly.', ephemeral: true });
+                    await interaction.editReply({ content: '❌ The "Got Verified" command is not configured correctly.' });
                 }
                 return;
             }
-             else if (customId.startsWith('suggest_vote_')) {
+            else if (customId.startsWith('suggest_vote_')) {
                 await this._handleSuggestionVote(interaction);
+                return;
             }
             else if (customId.startsWith('delete_suggestion_')) {
                 await this._handleSuggestionDelete(interaction);
+                return;
+            }
+            if (interaction.deferred || interaction.replied) {
+                await interaction.editReply({ content: '❌ Unknown button interaction.' }).catch(e => console.error("Error editing reply for unknown button:", e));
             }
         }
         else if (interaction.isModalSubmit()) {
@@ -221,113 +290,253 @@ class PulchowkBot {
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleModalSubmit === 'function') {
                     await verifyCmd.handleModalSubmit(interaction);
+                } else {
+                    console.warn('Verify command not found or handleModalSubmit function missing.');
+                    await interaction.reply({ content: '❌ An error occurred with the verification process.', flags: [MessageFlags.Ephemeral] });
                 }
                 return;
             } else if (interaction.customId === 'confirmOtpModal') {
                 const confirmOtpCmd = this.client.commands.get('confirmotp');
                 if (confirmOtpCmd && typeof confirmOtpCmd.handleModalSubmit === 'function') {
                     await confirmOtpCmd.handleModalSubmit(interaction);
+                } else {
+                    console.warn('ConfirmOTP command not found or handleModalSubmit function missing.');
+                    await interaction.reply({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] });
                 }
                 return;
+            } else if (customId.startsWith('deny_reason_modal_')) {
+                const suggestionId = interaction.customId.split('_')[3];
+                const reason = interaction.fields.getTextInputValue('denyReasonInput');
+                await this._processSuggestionDenial(interaction, suggestionId, reason);
+            } else if (customId.startsWith('delete_reason_modal_')) {
+                const suggestionId = interaction.customId.split('_')[3];
+                const reason = interaction.fields.getTextInputValue('deleteReasonInput');
+                await this._processSuggestionDelete(interaction, suggestionId, reason);
             }
         }
     }
 
-    async _onMessageCreate(message) {
-        if (message.author.bot) return;
-        if (!message.guild) {
-            return;
+    async _onGuildMemberRemove(member) {
+        if (member.user.bot) return;
+
+        console.log(`User ${member.user.tag} (${member.user.id}) left guild ${member.guild.name} (${member.guild.id}).`);
+
+        try {
+            // First, attempt to send farewell message to a designated channel (more reliable than DM)
+            const row = await new Promise((resolve, reject) => {
+                this.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], (err, result) => {
+                    if (err) reject(err);
+                    else resolve(result);
+                });
+            });
+
+            if (row && row.farewell_channel_id) {
+                const farewellChannel = member.guild.channels.cache.get(row.farewell_channel_id);
+                if (farewellChannel && (farewellChannel.type === ChannelType.GuildText || farewellChannel.type === ChannelType.GuildAnnouncement)) {
+                    await farewellChannel.send({ embeds: [new EmbedBuilder()
+                        .setColor('#FF0000')
+                        .setDescription(`👋 **${member.user.tag}** has left the server. We'll miss them!`)
+                        .setTimestamp()
+                    ]}).catch(e => console.error("Error sending farewell message to channel:", e));
+                    console.log(`Successfully attempted to send farewell message to channel for ${member.user.tag}.`);
+                } else {
+                    console.warn(`Configured farewell channel ${row.farewell_channel_id} not found or is not a text/announcement channel.`);
+                }
+            }
+
+            // Then, attempt to send farewell DM
+            const farewellEmbed = new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle(`Goodbye from ${member.guild.name}!`)
+                .setDescription(`We're sorry to see you go, **${member.user.username}**! We hope you had a good time with us.`)
+                .setThumbnail(member.guild.iconURL())
+                .setTimestamp()
+                .setFooter({ text: 'You can rejoin anytime!' });
+
+            await member.user.send({ embeds: [farewellEmbed] }).catch(error => {
+                console.warn(`Could not send farewell DM to ${member.user.tag}:`, error.message);
+            });
+            console.log(`Successfully attempted to send farewell DM to ${member.user.tag}.`);
+
+            // Add a small, non-blocking delay to allow async operations to complete
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+
+        } catch (error) {
+            console.error('An unexpected error occurred during guild member removal process:', error);
+            // If the bot is crashing, this log will help identify the source.
         }
+    }
+
+    async _onVoiceStateUpdate(oldState, newState) {
+        const userId = newState.member.id;
+        const guildId = newState.guild.id;
+        const currentTime = Date.now();
+
+        if (!oldState.channelId && newState.channelId) {
+            this.db.run(`INSERT OR REPLACE INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
+                [userId, guildId, newState.channelId, currentTime],
+                (err) => {
+                    if (err) console.error('Error inserting active voice session:', err.message);
+                    else {
+                        this.voiceStates.set(userId, { guildId, channelId: newState.channelId, joinTime: currentTime });
+                        console.log(`[Voice] ${newState.member.user.tag} joined voice channel ${newState.channel.name}. Session started.`);
+                    }
+                }
+            );
+        }
+        else if (oldState.channelId && (!newState.channelId || oldState.channelId !== newState.channelId)) {
+            this.db.get(`SELECT join_time FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], async (err, row) => {
+                if (err) {
+                    console.error('Error fetching active voice session for update:', err.message);
+                    return;
+                }
+                if (row) {
+                    const durationMs = currentTime - row.join_time;
+                    const durationMinutes = Math.floor(durationMs / (1000 * 60));
+
+                    if (durationMinutes > 0) {
+                        this.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 0, ?)
+                                     ON CONFLICT(user_id, guild_id) DO UPDATE SET voice_time_minutes = voice_time_minutes + ?`,
+                            [userId, guildId, durationMinutes, durationMinutes],
+                            (updateErr) => {
+                                if (updateErr) console.error('Error updating voice time in user_stats:', updateErr.message);
+                                else console.log(`[Voice] Updated voice time for ${oldState.member.user.tag} by ${durationMinutes} minutes.`);
+                            }
+                        );
+                    }
+                    this.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (deleteErr) => {
+                        if (deleteErr) console.error('Error deleting active voice session:', deleteErr.message);
+                        else console.log(`[Voice] Session for ${oldState.member.user.tag} ended/moved.`);
+                    });
+                } else {
+                    console.warn(`[Voice] No active session found in DB for ${oldState.member.user.tag} when leaving/moving channel.`);
+                }
+                this.voiceStates.delete(userId);
+                if (newState.channelId) {
+                    this.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
+                        [userId, guildId, newState.channelId, currentTime],
+                        (err) => {
+                            if (err) console.error('Error inserting new active voice session after move:', err.message);
+                            else {
+                                this.voiceStates.set(userId, { guildId, channelId: newState.channelId, joinTime: currentTime });
+                                console.log(`[Voice] ${newState.member.user.tag} moved to ${newState.channel.name}. New session started.`);
+                            }
+                        }
+                    );
+                }
+            });
+        }
+    }
+
+    async _onMessageCreate(message) {
+        if (message.author.bot || !message.guild) return;
+
         await this._handleAntiSpam(message);
         await this._updateUserMessageStats(message);
     }
 
     async _onGuildMemberAdd(member) {
+        if (member.user.bot) return;
+
+        console.log(`User ${member.user.tag} (${member.user.id}) joined guild ${member.guild.name} (${member.guild.id}).`);
+
+        const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
+        const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
+
         this.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
             if (err) {
                 console.error('Error fetching welcome config:', err.message);
                 return;
             }
 
-            const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
+            let welcomeMessage = row?.welcome_message_content || `Welcome to ${member.guild.name}, ${member}!`;
+            welcomeMessage = welcomeMessage.replace(/{user}/g, member.toString())
+                                           .replace(/{guild}/g, member.guild.name);
 
-            try {
-                const verifyButton = new ButtonBuilder()
-                    .setCustomId(`confirm_otp_button_${member.user.id}`) 
-                    .setLabel('Verify Your Account')
-                    .setStyle(ButtonStyle.Primary);
+            let dmEmbed;
+            let dmComponents = [];
 
-                const rowAction = new ActionRowBuilder().addComponents(verifyButton);
+            this.db.get(`SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`, [member.user.id, member.guild.id], async (err, verifiedRow) => {
+                if (err) {
+                    console.error('Error checking verified_users table:', err.message);
+                }
 
-                const dmEmbed = new EmbedBuilder()
-                    .setColor('#0099ff')
-                    .setTitle(`👋 Welcome to ${member.guild.name}!`)
-                    .setDescription(`We're excited to have you here, ${member.user.username}! To gain full access to the server, please verify your account.`)
-                    .addFields(
-                        { name: 'How to Verify:', value: 'Click the button below to start the verification process and get your roles!' }
-                    )
-                    .setThumbnail(userAvatar)
-                    .setFooter({ text: 'Pulchowk Bot | Secure Verification' })
-                    .setTimestamp();
-
-                await member.send({ embeds: [dmEmbed], components: [rowAction] });
-                console.log(`Sent welcome DM with verify button to ${member.user.tag}`);
-            } catch (dmErr) {
-                console.warn(`Could not send welcome DM to ${member.user.tag}: ${dmErr.message}`);
-            }
-
-            if (row && row.welcome_message_content && row.welcome_channel_id && !row.send_welcome_as_dm) {
-                const channel = member.guild.channels.cache.get(row.welcome_channel_id);
-                if (channel || (channel.type === ChannelType.GuildText && channel.type === ChannelType.GuildAnnouncement)) {
-                    const publicWelcomeEmbed = new EmbedBuilder()
-                        .setColor('#00FF00')
-                        .setTitle(`🎉 A New Pulchowkian Has Arrived!`)
-                        .setDescription(`Please give a warm welcome to <@${member.id}>!`)
-                        .setThumbnail(userAvatar)
-                        .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
-                        .setTimestamp();
-
-                    if (row.welcome_message_content) {
-                        publicWelcomeEmbed.addFields({
-                            name: 'Message from the Admins:',
-                            value: row.welcome_message_content.replace(/{user}/g, `<@${member.id}>`)
-                        });
+                if (verifiedRow) {
+                    console.log(`User ${member.user.tag} was previously verified. Attempting to re-assign role.`);
+                    if (VERIFIED_ROLE_ID) {
+                        const verifiedRole = member.guild.roles.cache.get(VERIFIED_ROLE_ID);
+                        if (verifiedRole) {
+                            try {
+                                await member.roles.add(verifiedRole);
+                                console.log(`Re-assigned verified role to ${member.user.tag}.`);
+                            } catch (roleErr) {
+                                console.error(`Failed to re-assign verified role to ${member.user.tag}:`, roleErr.message);
+                            }
+                        } else {
+                            console.warn(`VERIFIED_ROLE_ID (${VERIFIED_ROLE_ID}) not found in guild ${member.guild.name}.`);
+                        }
                     }
 
-                    await channel.send({ embeds: [publicWelcomeEmbed] }).catch(e => console.error('Error sending public welcome message:', e));
-                    console.log(`Sent public welcome message to ${channel.name} for ${member.user.tag}`);
-                } else {
-                    console.warn(`Configured welcome channel ${row.welcome_channel_id} not found or is not a text channel for public welcome.`);
-                }
-            }
-        });
-    }
-
-    async _onGuildMemberRemove(member) {
-        this.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
-            if (err) {
-                console.error('Error fetching farewell config:', err.message);
-                return;
-            }
-
-            if (row && row.farewell_channel_id) {
-                const channel = member.guild.channels.cache.get(row.farewell_channel_id);
-                if (channel || (channel.type === ChannelType.GuildText && channel.type === ChannelType.GuildAnnouncement)) {
-                    const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
-                    const farewellEmbed = new EmbedBuilder()
-                        .setColor('#FF0000')
-                        .setTitle(`👋 Farewell, Comrade!`)
-                        .setDescription(`${member.user.tag} has left the server. We hope they had a great time with us.`)
+                    dmEmbed = new EmbedBuilder()
+                        .setColor('#00FF00')
+                        .setTitle(`👋 Welcome Back to ${member.guild.name}!`)
+                        .setDescription(`It's great to see you again, **${member.user.username}**! You've been automatically re-verified. Enjoy your stay!`)
                         .setThumbnail(userAvatar)
-                        .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
+                        .setFooter({ text: 'Pulchowk Bot | Welcome Back' })
                         .setTimestamp();
 
-                    await channel.send({ embeds: [farewellEmbed] }).catch(e => console.error('Error sending farewell message:', e));
-                    console.log(`Sent farewell message for ${member.user.tag} to ${channel.name}`);
                 } else {
-                    console.warn(`Configured farewell channel ${row.farewell_channel_id} not found or is not a text channel.`);
+                    const verifyButton = new ButtonBuilder()
+                        .setCustomId(`verify_start_button_${member.user.id}`)
+                        .setLabel('Verify Your Account')
+                        .setStyle(ButtonStyle.Primary);
+
+                    dmComponents = [new ActionRowBuilder().addComponents(verifyButton)];
+
+                    dmEmbed = new EmbedBuilder()
+                        .setColor('#0099ff')
+                        .setTitle(`👋 Welcome to ${member.guild.name}!`)
+                        .setDescription(`We're excited to have you here, ${member.user.username}! To gain full access to the server, please verify your account.`)
+                        .addFields(
+                            { name: 'How to Verify:', value: 'Click the button below to start the verification process.' }
+                        )
+                        .setThumbnail(userAvatar)
+                        .setFooter({ text: 'Pulchowk Bot | Secure Verification' })
+                        .setTimestamp();
                 }
-            }
+
+                try {
+                    await member.send({ embeds: [dmEmbed], components: dmComponents });
+                    console.log(`Sent welcome DM to ${member.user.tag}.`);
+                } catch (dmErr) {
+                    console.warn(`Could not send welcome DM to ${member.user.tag}: ${dmErr.message}`);
+                }
+
+                if (row && row.welcome_channel_id) {
+                    const channel = member.guild.channels.cache.get(row.welcome_channel_id);
+                    if (channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)) {
+                        const publicWelcomeEmbed = new EmbedBuilder()
+                            .setColor('#00FF00')
+                            .setTitle(`🎉 A New Pulchowkian Has Arrived!`)
+                            .setDescription(`Please give a warm welcome to <@${member.id}>!`)
+                            .setThumbnail(userAvatar)
+                            .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
+                            .setTimestamp();
+
+                        if (row.welcome_message_content) {
+                            publicWelcomeEmbed.addFields({
+                                name: 'Message from the Admins:',
+                                value: row.welcome_message_content.replace(/{user}/g, `<@${member.id}>`).replace(/{guild}/g, member.guild.name)
+                            });
+                        }
+
+                        await channel.send({ embeds: [publicWelcomeEmbed] }).catch(e => console.error('Error sending public welcome message:', e));
+                        console.log(`Sent public welcome message to ${channel.name} for ${member.user.tag}`);
+                    } else {
+                        console.warn(`Configured welcome channel ${row.welcome_channel_id} not found or is not a text/announcement channel for public welcome.`);
+                    }
+                }
+            });
         });
     }
 
@@ -371,7 +580,7 @@ class PulchowkBot {
                                 }
                             }
                         } else {
-                            console.warn(`Configured role ${row.role_id} for reaction role not found in guild ${reaction.message.guild.name}.`);
+                            console.warn(`Configured role ${row.role_id} for reaction role not found in guild ${reaction.message.guild.name}. Deleting invalid entry.`);
                             this.db.run(`DELETE FROM reaction_roles WHERE role_id = ? AND guild_id = ?`, [row.role_id, reaction.message.guild.id]);
                         }
                     }
@@ -447,6 +656,7 @@ class PulchowkBot {
             }
         }
         if (user.bot || !reaction.message.guild) return;
+
         this.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
             [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
             async (err, row) => {
@@ -525,70 +735,10 @@ class PulchowkBot {
         }
     }
 
-    async _onVoiceStateUpdate(oldState, newState) {
-        const userId = newState.member.id;
-        const guildId = newState.guild.id;
-        if (!oldState.channelId && newState.channelId) {
-            this.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
-                [userId, guildId, newState.channelId, Date.now()],
-                (err) => {
-                    if (err) console.error('Error inserting active voice session:', err.message);
-                    else {
-                        this.voiceStates.set(userId, { guildId, channelId: newState.channelId, joinTime: Date.now() });
-                        console.log(`[Voice] ${newState.member.user.tag} joined voice channel ${newState.channel.name}. Session started.`);
-                    }
-                }
-            );
-        }
-        else if (oldState.channelId && (!newState.channelId || oldState.channelId !== newState.channelId)) {
-            this.db.get(`SELECT join_time FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], async (err, row) => {
-                if (err) {
-                    console.error('Error fetching active voice session for update:', err.message);
-                    return;
-                }
-                if (row) {
-                    const durationMs = Date.now() - row.join_time;
-                    const durationMinutes = Math.floor(durationMs / (1000 * 60));
-
-                    if (durationMinutes > 0) {
-                        this.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 1, ?)
-                                     ON CONFLICT(user_id, guild_id) DO UPDATE SET voice_time_minutes = voice_time_minutes + ?`,
-                            [userId, guildId, durationMinutes, durationMinutes],
-                            (updateErr) => {
-                                if (updateErr) console.error('Error updating voice time in user_stats:', updateErr.message);
-                                else console.log(`[Voice] Updated voice time for ${oldState.member.user.tag} by ${durationMinutes} minutes.`);
-                            }
-                        );
-                    }
-                    this.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (deleteErr) => {
-                        if (deleteErr) console.error('Error deleting active voice session:', deleteErr.message);
-                        else console.log(`[Voice] Session for ${oldState.member.user.tag} ended/moved.`);
-                    });
-                } else {
-                    console.warn(`[Voice] No active session found in DB for ${oldState.member.user.tag} when leaving/moving channel.`);
-                }
-                this.voiceStates.delete(userId);
-                if (newState.channelId) {
-                    this.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
-                        [userId, guildId, newState.channelId, Date.now()],
-                        (err) => {
-                            if (err) console.error('Error inserting new active voice session after move:', err.message);
-                            else {
-                                this.voiceStates.set(userId, { guildId, channelId: newState.channelId, joinTime: Date.now() });
-                                console.log(`[Voice] ${newState.member.user.tag} moved to ${newState.channel.name}. New session started.`);
-                            }
-                        }
-                    );
-                }
-            });
-        }
-    }
-
     async _handleAntiSpam(message) {
         if (!message.guild) {
             return;
         }
-
         const userId = message.author.id;
         const guildId = message.guild.id;
 
@@ -597,7 +747,6 @@ class PulchowkBot {
                 console.error('Error fetching anti-spam config:', err.message);
                 return;
             }
-
             const antiSpamConfig = config || {
                 message_limit: 5,
                 time_window_seconds: 5,
@@ -605,7 +754,6 @@ class PulchowkBot {
                 kick_threshold: 3,
                 ban_threshold: 5
             };
-
             const { message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold } = antiSpamConfig;
 
             if (!this.spamMap.has(userId)) {
@@ -673,9 +821,10 @@ class PulchowkBot {
         );
     }
 
-    _scheduleDailyTasks() {
+    _scheduleJobs() {
         const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000');
         if (NOTICE_CHECK_INTERVAL_MS > 0) {
+            console.log(`[Scheduler] Initializing notice checking. Interval: ${NOTICE_CHECK_INTERVAL_MS / 1000} seconds.`);
             this._checkAndAnnounceNotices();
             setInterval(() => this._checkAndAnnounceNotices(), NOTICE_CHECK_INTERVAL_MS);
             console.log(`Scheduled notice checking every ${NOTICE_CHECK_INTERVAL_MS / 60000} minutes.`);
@@ -693,13 +842,16 @@ class PulchowkBot {
     }
 
     async _checkAndAnnounceNotices() {
-        console.log('[Scheduler] Checking for new notices...');
+        console.log('[Scheduler] Starting check for new notices...');
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
         const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
         const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments');
 
+        console.log(`[Scheduler] TARGET_NOTICE_CHANNEL_ID: ${TARGET_NOTICE_CHANNEL_ID}`);
+        console.log(`[Scheduler] NOTICE_ADMIN_CHANNEL_ID: ${NOTICE_ADMIN_CHANNEL_ID}`);
         console.log(`[Debug] Current Working Directory (process.cwd()): ${process.cwd()}`);
         console.log(`[Debug] Calculated TEMP_ATTACHMENT_DIR: ${TEMP_ATTACHMENT_DIR}`);
+
         try {
             await fsPromises.mkdir(TEMP_ATTACHMENT_DIR, { recursive: true });
             console.log(`[Debug] Successfully ensured TEMP_ATTACHMENT_DIR exists: ${TEMP_ATTACHMENT_DIR}`);
@@ -725,8 +877,8 @@ class PulchowkBot {
         let noticeChannel;
         try {
             noticeChannel = await this.client.channels.fetch(TARGET_NOTICE_CHANNEL_ID);
-            if (!noticeChannel || (noticeChannel.type !== ChannelType.GuildText && noticeChannel.type !== ChannelType.GuildAnnouncement)) {
-                console.error(`[Scheduler] Configured notice channel (${TARGET_NOTICE_CHANNEL_ID}) not found or is not a text channel.`);
+            if (!noticeChannel || (noticeChannel.type === ChannelType.GuildText || noticeChannel.type === ChannelType.GuildAnnouncement)) {
+                console.error(`[Scheduler] Configured notice channel (${TARGET_NOTICE_CHANNEL_ID}) not found or is not a text/announcement channel.`);
                 return;
             }
         } catch (error) {
@@ -743,8 +895,11 @@ class PulchowkBot {
                 adminChannel = null;
             }
         }
+
         try {
+            console.log('[Scheduler] Calling scrapeLatestNotice()...');
             let scrapedNotices = await scrapeLatestNotice();
+            console.log(`[Scheduler] scrapeLatestNotice() returned: ${JSON.stringify(scrapedNotices)}`);
 
             if (!scrapedNotices || scrapedNotices.length === 0) {
                 console.log('[Scheduler] No notices found or scraper returned empty.');
@@ -767,6 +922,8 @@ class PulchowkBot {
                 console.log('[Scheduler] No valid dates found in scraped notices.');
                 return;
             }
+            console.log(`[Scheduler] Latest date found in notices: ${latestDate.toISOString().split('T')[0]}`);
+
 
             const noticesToAnnounce = scrapedNotices.filter(notice => {
                 const noticeDate = new Date(notice.date);
@@ -779,6 +936,8 @@ class PulchowkBot {
                 console.log('[Scheduler] No notices found for the latest date.');
                 return;
             }
+            console.log(`[Scheduler] Found ${noticesToAnnounce.length} notices to announce for the latest date.`);
+
 
             for (const notice of noticesToAnnounce) {
                 if (!notice || !notice.title || !notice.link) {
@@ -830,6 +989,7 @@ class PulchowkBot {
                                     writer.on('finish', resolve);
                                     writer.on('error', reject);
                                 });
+                                
                                 const MAX_PDF_PAGES_TO_CONVERT = 5;
                                 if (fileName.toLowerCase().endsWith('.pdf')) {
                                     try {
@@ -910,6 +1070,7 @@ class PulchowkBot {
                         }
                     }
                     noticeEmbed.setDescription(description);
+                    
                     try {
                         await noticeChannel.send({ embeds: [noticeEmbed], files: filesToSend });
                         console.log(`Sent notice and attachments for "${notice.title}" to Discord.`);
@@ -926,6 +1087,7 @@ class PulchowkBot {
                             }
                         }
                     }
+                    
                     await new Promise((resolve, reject) => {
                         this.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
                             [notice.title, notice.link, notice.date, Date.now()],
@@ -958,6 +1120,7 @@ class PulchowkBot {
             await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(e => console.error('Error deleting temp directory after all notices processed:', e));
         }
     }
+
     async _announceBirthdays() {
         console.log('[Scheduler] Checking for birthdays...');
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
@@ -970,136 +1133,98 @@ class PulchowkBot {
         let announcementChannel;
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
-            if (!announcementChannel || (announcementChannel.type !== ChannelType.GuildText && announcementChannel.type !== ChannelType.GuildAnnouncement)) {
-                console.error(`[Scheduler] Configured birthday channel not found or is not a text channel.`);
+            if (!announcementChannel || (announcementChannel.type === ChannelType.GuildText || announcementChannel.type === ChannelType.GuildAnnouncement)) {
+                console.error(`[Scheduler] Configured birthday channel (${BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID}) not found or is not a text/announcement channel.`);
                 return;
             }
         } catch (error) {
-            console.error(`[Scheduler] Error fetching respective birthday channel:`, error.message);
+            console.error(`[Scheduler] Error fetching birthday announcement channel ${BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID}:`, error.message);
             return;
         }
+
         const today = new Date();
         const currentMonth = today.getMonth() + 1;
         const currentDay = today.getDate();
         const guilds = this.client.guilds.cache;
-        for (const [_, guild] of guilds) {
+
+        for (const [guildId, guild] of guilds) {
             try {
-                this.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
-                    [guild.id, currentMonth, currentDay],
-                    async (err, rows) => {
-                        if (err) {
-                            console.error(`Error fetching birthdays for guild ${guild.id}:`, err.message);
-                            return;
-                        }
-                        if (rows.length > 0) {
-                            const birthdayUsers = [];
-                            let firstBirthdayUserAvatarUrl = null;
-                            for (const row of rows) {
-                                try {
-                                    const member = await guild.members.fetch(row.user_id);
-                                    let ageString = '';
-                                    if (row.year) {
-                                        const age = today.getFullYear() - row.year;
-                                        if (age >= 0) ageString = ` (turning ${age})`;
-                                    }
-                                    birthdayUsers.push(`• <@${member.user.id}>${ageString}`);
-                                    if (!firstBirthdayUserAvatarUrl) {
-                                        firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 });
-                                    }
-                                } catch (fetchErr) {
-                                    console.warn(`Could not fetch birthday user ${row.user_id} in guild ${guild.id}:`, fetchErr.message);
-                                    birthdayUsers.push(`• Unknown User (ID: ${row.user_id})`);
-                                }
+                const rows = await new Promise((resolve, reject) => {
+                    this.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
+                        [guild.id, currentMonth, currentDay],
+                        (err, resultRows) => {
+                            if (err) {
+                                console.error(`Error fetching birthdays for guild ${guild.name} (${guild.id}):`, err.message);
+                                return reject(err);
                             }
-                            const authorName = `Free Students' Union, Pulchowk Campus - 2081`;
-                            const authorIconUrl = "https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&";
-                            const authorWebsiteUrl = "https://www.facebook.com/fsupulchowk";
-                            const birthdayEmbed = new EmbedBuilder()
-                                .setColor('#FFD700')
-                                .setAuthor({
-                                    name: authorName,
-                                    iconURL: authorIconUrl,
-                                    url: authorWebsiteUrl
-                                })
-                                .setTitle('🎂 Happy Birthday!')
-                                .setDescription(`🎉 Wishing a very happy birthday to our amazing community members:\n\n${birthdayUsers.join('\n')}\n\nMay you have a fantastic day filled with joy and celebration!`)
-                                .setImage('https://codaio.imgix.net/docs/Y_HFctSU9K/blobs/bl-4kLxBlt-8t/66dbaff27d8df6da40fc20009f59a885dca2e859e880d992e28c3096d08bd205041c9ea43d0ca891055d56e79864748a9564d1be896d57cc93bf6c57e6b25e879d80a6d5058a91ef3572aff7c0a3b9efb24f7f0d1daa0d170368b9686d674c81650fa247?auto=format%2Ccompress&fit=crop&w=1920&ar=4%3A1&crop=focalpoint&fp-x=0.5&fp-y=0.5&fp-z=1')
-                                .setTimestamp();
-                            if (firstBirthdayUserAvatarUrl) {
-                                birthdayEmbed.setThumbnail(firstBirthdayUserAvatarUrl);
-                            } else {
-                                birthdayEmbed.setThumbnail('https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&')
-                            }
-                            await announcementChannel.send({ embeds: [birthdayEmbed] }).catch(e => console.error(`Error sending birthday announcement in guild ${guild.id}:`, e));
+                            resolve(resultRows);
                         }
-                    }
-                );
-            } catch (guildError) {
-                console.error(`Error processing guild ${guild.id} for birthdays:`, guildError);
-            }
-        }
-    }
-
-    async _handleSuggestionDelete(interaction) {
-        try {
-            await interaction.deferReply({ ephemeral: true });
-
-            const suggestionId = interaction.customId.split('_')[2];
-            if (!suggestionId) {
-                return interaction.editReply({ content: '❌ Could not find the suggestion ID for this button.' });
-            }
-
-            const db = this.db;
-            db.get(`SELECT user_id, message_id, status, created_at FROM suggestions WHERE id = ? AND guild_id = ?`, [suggestionId, interaction.guild.id], async (err, row) => {
-                if (err) {
-                    console.error('Error fetching suggestion to delete:', err.message);
-                    return interaction.editReply({ content: '❌ An error occurred while fetching the suggestion from the database.' });
-                }
-                if (!row) {
-                    try {
-                        await interaction.message.edit({ components: [] });
-                    } catch (e) {
-                        return interaction.editReply({ content: '❌ This suggestion could not be found in the database. It might have already been deleted.' });
-                    }
-                }
-                const isAuthor = interaction.user.id === row.user_id;
-                const isModerator = interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages);
-
-                if (isModerator) {
-                } else if (isAuthor) {
-                    const oneHour = 60 * 60 * 1000;
-                    const suggestionAge = Date.now() - row.created_at;
-                    if (suggestionAge > oneHour) {
-                        return interaction.editReply({ content: "❌ You can only delete your own suggestion within one hour of posting it." });
-                    }
-                } else {
-                    return interaction.editReply({ content: "❌ You don't have permission to delete this suggestion. Only the author (within 1 hour) or a moderator can." });
-                }
-
-                try {
-                    const suggestionsChannel = await this.client.channels.fetch(process.env.SUGGESTIONS_CHANNEL_ID);
-                    const suggestionMessage = await suggestionsChannel.messages.fetch(row.message_id);
-                    await suggestionMessage.delete();
-                } catch (deleteMsgErr) {
-                    console.warn(`Could not delete suggestion message ${row.message_id}: ${deleteMsgErr.message}. It may have already been deleted.`);
-                }
-                db.run(`DELETE FROM suggestions WHERE id = ?`, [suggestionId], (deleteDbErr) => {
-                    if (deleteDbErr) {
-                        console.error('Error deleting suggestion from database:', deleteDbErr.message);
-                        return interaction.editReply({ content: '❌ The suggestion message was deleted, but there was an error removing it from the database.' });
-                    }
-                    interaction.editReply({ content: `✅ Suggestion #${suggestionId} has been successfully deleted.` });
+                    );
                 });
-            });
-        } catch (error) {
-            console.error('Error in _handleSuggestionDelete:', error);
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: '❌ An unexpected error occurred.', ephemeral: true }).catch(() => {});
-            } else {
-                await interaction.editReply({ content: '❌ An unexpected error occurred.' }).catch(() => {});
+
+                if (rows.length > 0) {
+                    const birthdayUsers = [];
+                    let firstBirthdayUserAvatarUrl = null;
+                    for (const row of rows) {
+                        try {
+                            const member = await guild.members.fetch(row.user_id);
+                            let ageString = '';
+                            if (row.year) {
+                                const age = today.getFullYear() - row.year;
+                                if (age >= 0) ageString = ` (turning ${age})`;
+                            }
+                            birthdayUsers.push(`• <@${member.user.id}>${ageString}`);
+                            if (!firstBirthdayUserAvatarUrl) {
+                                firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 });
+                            }
+                        } catch (fetchErr) {
+                            console.warn(`Could not fetch birthday user ${row.user_id} in guild ${guild.name} (${guild.id}):`, fetchErr.message);
+                            birthdayUsers.push(`• Unknown User (ID: ${row.user.id})`);
+                        }
+                    }
+
+                    if (birthdayUsers.length > 0) {
+                        const authorName = `Free Students' Union, Pulchowk Campus - 2081`;
+                        const authorIconUrl = "https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&";
+                        const authorWebsiteUrl = "https://www.facebook.com/fsupulchowk";
+                        
+                        const birthdayEmbed = new EmbedBuilder()
+                            .setColor('#FFD700')
+                            .setAuthor({
+                                name: authorName,
+                                iconURL: authorIconUrl,
+                                url: authorWebsiteUrl
+                            })
+                            .setTitle('🎂 Happy Birthday!')
+                            .setDescription(`🎉 Wishing a very happy birthday to our amazing community members:\n\n${birthdayUsers.join('\n')}\n\nMay you have a fantastic day filled with joy and celebration!`)
+                            .setImage('https://codaio.imgix.net/docs/Y_HFctSU9K/blobs/bl-4kLxBlt-8t/66dbaff27d8df6da40fc20009f59a885dca2e859e880d992e28c3096d08bd205041c9ea43d0ca891055d56e79864748a9564d1be896d57cc93bf6c57e6b25e879d80a6d5058a91ef3572aff7c0a3b9efb24f7f0d1daa0d170368b9686d674c81650fa247?auto=format%2Ccompress&fit=crop&w=1920&ar=4%3A1&crop=focalpoint&fp-x=0.5&fp-y=0.5&fp-z=1')
+                            .setTimestamp();
+                        
+                        if (firstBirthdayUserAvatarUrl) {
+                            birthdayEmbed.setThumbnail(firstBirthdayUserAvatarUrl);
+                        } else {
+                            birthdayEmbed.setThumbnail('https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&');
+                        }
+                        
+                        await announcementChannel.send({ embeds: [birthdayEmbed] }).catch(e => console.error(`Error sending birthday announcement in guild ${guild.name} (${guild.id}):`, e));
+                    } else {
+                        console.log(`[Scheduler] No birthdays found for today in guild ${guild.name} (${guild.id}).`);
+                    }
+                }
+            } catch (guildError) {
+                console.error(`Error processing guild ${guild.name} (${guild.id}) for birthdays:`, guildError);
             }
         }
     }
+
+    _scheduleJobs() {
+        // The notice checking is already handled by setInterval in the constructor
+        // This part is for daily jobs like birthdays
+        schedule.scheduleJob('0 0 * * *', () => {
+            this._announceBirthdays();
+        });
+    }
+
     start() {
         this.client.login(this.token);
     }
@@ -1107,6 +1232,7 @@ class PulchowkBot {
 
 async function main() {
     try {
+        await writeServiceAccountKey();
         const database = await initializeDatabase();
         const bot = new PulchowkBot(process.env.BOT_TOKEN, database);
         bot.start();

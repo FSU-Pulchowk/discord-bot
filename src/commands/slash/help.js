@@ -11,19 +11,23 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction) {
     const commandName = interaction.options.getString('command_name');
-    const prefix = '/'; 
+    const prefix = '/';
 
     const helpEmbed = new EmbedBuilder()
         .setColor('#0099ff')
-        .setTimestamp();
+        .setTimestamp()
+        .setFooter({ text: 'Developed for FSU Pulchowk Campus' });
 
     if (!commandName) {
         helpEmbed
             .setTitle('FSU Pulchowk Bot Commands')
             .setDescription(`My prefix is \`${prefix}\`.\nUse \`${prefix}help [command_name]\` for more info on a specific command.`)
-            .setThumbnail(interaction.client.user.displayAvatarURL())
-            .setFooter({ text: 'Developed for FSU Pulchowk Campus' });
+            .setThumbnail(interaction.client.user.displayAvatarURL());
+        
         const commands = interaction.client.commands;
+
+        const isModerator = interaction.member?.permissions.has(PermissionsBitField.Flags.KickMembers) || false;
+        const isAdmin = interaction.member?.permissions.has(PermissionsBitField.Flags.BanMembers) || interaction.member?.permissions.has(PermissionsBitField.Flags.Administrator) || false;
 
         const generalCommands = [];
         const utilityCommands = [];
@@ -36,33 +40,46 @@ export async function execute(interaction) {
         commands.forEach(cmd => {
             const cmdName = cmd.data.name;
             const cmdDescription = cmd.data.description;
-            const cmdUsage = cmd.data.options.length > 0 ? cmd.data.options.map(opt => `<${opt.name}>`).join(' ') : '';
-            const cmdLine = `\`/${cmdName} ${cmdUsage}\` - ${cmdDescription}`;
+            const cmdLine = `\`/${cmdName}\` - ${cmdDescription}`;
 
             if (['help', 'mystats', 'topchatters', 'topvoice', 'links', 'news', 'holidays', 'suggest'].includes(cmdName)) {
                 generalCommands.push(cmdLine);
-            } else if (['setbirthday', 'removebirthday', 'getfaq'].includes(cmdName)) {
+            } 
+            else if (['setbirthday', 'removebirthday', 'getfaq'].includes(cmdName)) {
                 utilityCommands.push(cmdLine);
-            } else if (['setupfsu', 'setreactionrole', 'removereactionrole', 'setwelcome', 'setantispam', 'viewantispam'].includes(cmdName)) {
-                adminSetupConfig.push(cmdLine);
-            } else if (['addfaq', 'removefaq', 'addtask', 'completetask', 'listtasks'].includes(cmdName)) {
-                adminTasksFaq.push(cmdLine);
-            } else if (['assignrole', 'removerole', 'allroles', 'ban', 'kick', 'timeout', 'warn'].includes(cmdName)) {
-                moderationCommands.push(cmdLine);
-            } else if (['listsuggestions', 'approvesuggestion', 'denysuggestion', 'nuke', 'gotverified'].includes(cmdName)) {
-                suggestionModeration.push(cmdLine);
-            } else if (['verify', 'confirmotp'].includes(cmdName)) {
+            } 
+            else if (['verify', 'confirmotp'].includes(cmdName)) {
                 verificationCommands.push(cmdLine);
+            }
+            else if (['setupfsu', 'setreactionrole', 'removereactionrole', 'setwelcome', 'setantispam', 'viewantispam'].includes(cmdName)) {
+                if (isModerator || isAdmin) {
+                    adminSetupConfig.push(cmdLine);
+                }
+            } 
+            else if (['addfaq', 'removefaq', 'addtask', 'completetask', 'listtasks'].includes(cmdName)) {
+                if (isModerator || isAdmin) {
+                    adminTasksFaq.push(cmdLine);
+                }
+            }
+            else if (['assignrole', 'removerole', 'allroles', 'timeout', 'warn', 'kick', 'ban'].includes(cmdName)) {
+                if (isModerator || isAdmin) {
+                    moderationCommands.push(cmdLine);
+                }
+            }
+            else if (['listsuggestions', 'approvesuggestion', 'denysuggestion', 'nuke', 'gotverified'].includes(cmdName)) {
+                if (isModerator || isAdmin) {
+                    suggestionModeration.push(cmdLine);
+                }
             }
         });
 
-        if (generalCommands.length > 0) helpEmbed.addFields({ name: '✨ General Commands', value: generalCommands.join('\n'), inline: false });
-        if (utilityCommands.length > 0) helpEmbed.addFields({ name: '🛠️ Utility Commands', value: utilityCommands.join('\n'), inline: false });
-        if (adminSetupConfig.length > 0) helpEmbed.addFields({ name: '⚙️ Admin Setup & Config', value: adminSetupConfig.join('\n'), inline: false });
-        if (adminTasksFaq.length > 0) helpEmbed.addFields({ name: '📝 Admin Tasks & FAQs', value: adminTasksFaq.join('\n'), inline: false });
-        if (moderationCommands.length > 0) helpEmbed.addFields({ name: '🛡️ Moderation Commands', value: moderationCommands.join('\n'), inline: false });
-        if (suggestionModeration.length > 0) helpEmbed.addFields({ name: '💡 Suggestion & Advanced Tools', value: suggestionModeration.join('\n'), inline: false });
-        if (verificationCommands.length > 0) helpEmbed.addFields({ name: '✅ Verification Commands', value: verificationCommands.join('\n'), inline: false });
+        if (generalCommands.length > 0) helpEmbed.addFields({ name: '✨ General Commands', value: generalCommands.sort().join('\n'), inline: false });
+        if (utilityCommands.length > 0) helpEmbed.addFields({ name: '🛠️ Utility Commands', value: utilityCommands.sort().join('\n'), inline: false });
+        if (verificationCommands.length > 0) helpEmbed.addFields({ name: '✅ Verification Commands', value: verificationCommands.sort().join('\n'), inline: false });
+        if (adminSetupConfig.length > 0) helpEmbed.addFields({ name: '⚙️ Setup & Configuration (Moderator/Admin Only)', value: adminSetupConfig.sort().join('\n'), inline: false }); 
+        if (adminTasksFaq.length > 0) helpEmbed.addFields({ name: '📝 Admin Tasks & FAQs (Moderator/Admin Only)', value: adminTasksFaq.sort().join('\n'), inline: false }); 
+        if (moderationCommands.length > 0) helpEmbed.addFields({ name: '🛡️ Moderation Commands (Moderator/Admin Only)', value: moderationCommands.sort().join('\n'), inline: false }); 
+        if (suggestionModeration.length > 0) helpEmbed.addFields({ name: '💡 Suggestion & Advanced Tools (Moderator/Admin Only)', value: suggestionModeration.sort().join('\n'), inline: false }); 
 
         await interaction.reply({ embeds: [helpEmbed], ephemeral: true });
 
@@ -75,12 +92,16 @@ export async function execute(interaction) {
 
         helpEmbed
             .setTitle(`Command: ${prefix}${command.data.name}`)
-            .setDescription(command.data.description || 'No description provided.')
-            .addFields(
-                { name: 'Usage', value: `\`${prefix}${command.data.name} ${command.data.options.map(opt => `<${opt.name}>`).join(' ')}\``, inline: true }
-            );
+            .setDescription(command.data.description || 'No description provided.');
 
-        if (command.data.options.length > 0) {
+        let usageValue = `\`${prefix}${command.data.name}`;
+        if (command.data.options && command.data.options.length > 0) {
+            usageValue += ` ${command.data.options.map(opt => `<${opt.name}>`).join(' ')}`;
+        }
+        usageValue += '`';
+        helpEmbed.addFields({ name: 'Usage', value: usageValue, inline: false });
+
+        if (command.data.options && command.data.options.length > 0) {
             const optionsDescription = command.data.options.map(opt => {
                 let desc = `\`${opt.name}\`: ${opt.description}`;
                 if (opt.required) desc += ' (Required)';
