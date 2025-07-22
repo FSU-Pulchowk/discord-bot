@@ -1134,11 +1134,11 @@ class PulchowkBot {
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
             if (!announcementChannel || (announcementChannel.type === ChannelType.GuildText || announcementChannel.type === ChannelType.GuildAnnouncement)) {
-                console.error(`[Scheduler] Configured birthday channel (${BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID}) not found or is not a text/announcement channel.`);
+                console.error(`[Scheduler] Configured birthday channel not found or is not a text/announcement channel.`);
                 return;
             }
         } catch (error) {
-            console.error(`[Scheduler] Error fetching birthday announcement channel ${BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID}:`, error.message);
+            console.error(`[Scheduler] Error fetching birthday announcement channel:`, error.message);
             return;
         }
 
@@ -1178,7 +1178,7 @@ class PulchowkBot {
                                 firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 });
                             }
                         } catch (fetchErr) {
-                            console.warn(`Could not fetch birthday user ${row.user_id} in guild ${guild.name} (${guild.id}):`, fetchErr.message);
+                            console.warn(`Could not fetch birthday user ${row.user_id}):`, fetchErr.message);
                             birthdayUsers.push(`• Unknown User (ID: ${row.user.id})`);
                         }
                     }
@@ -1218,8 +1218,6 @@ class PulchowkBot {
     }
 
     _scheduleJobs() {
-        // The notice checking is already handled by setInterval in the constructor
-        // This part is for daily jobs like birthdays
         schedule.scheduleJob('0 0 * * *', () => {
             this._announceBirthdays();
         });
