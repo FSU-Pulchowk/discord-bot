@@ -17,13 +17,8 @@ import axios from 'axios';
 
 dotenv.config();
 
-// Global handler for unhandled promise rejections
 process.on('unhandledRejection', error => {
     console.error('Unhandled promise rejection (this caused the bot to crash):', error);
-    // Optionally, you can send a message to an admin channel here
-    // For example:
-    // client.channels.cache.get('ADMIN_LOG_CHANNEL_ID').send(`Unhandled Rejection: ${error.message}`);
-    // process.exit(1); // You might want to remove this line during debugging to keep the bot running
 });
 
 
@@ -75,7 +70,6 @@ class PulchowkBot {
 
         this._initializeCommands();
         this._registerEventListeners();
-        this._scheduleJobs();
     }
 
     _initializeCommands() {
@@ -107,6 +101,7 @@ class PulchowkBot {
             this._registerSlashCommands();
             initializeGoogleCalendarClient();
             this._loadActiveVoiceSessions();
+            this._scheduleJobs();
         });
 
         this.client.on(Events.InteractionCreate, this._onInteractionCreate.bind(this));
@@ -188,9 +183,6 @@ class PulchowkBot {
         }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
-
-            // Handle buttons that immediately show a modal first.
-            // These buttons should NOT be deferred here, as showModal is an initial response.
             if (customId.startsWith('verify_start_button_')) {
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
@@ -238,7 +230,6 @@ class PulchowkBot {
                 return;
             }
 
-            // For all other buttons, defer the reply.
             await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }).catch(e => {
                 console.error("Error deferring button interaction:", e);
                 return;
@@ -344,7 +335,6 @@ class PulchowkBot {
                 }
             }
 
-            // Then, attempt to send farewell DM
             const farewellEmbed = new EmbedBuilder()
                 .setColor('#FF0000')
                 .setTitle(`Goodbye from ${member.guild.name}!`)
@@ -358,12 +348,10 @@ class PulchowkBot {
             });
             console.log(`Successfully attempted to send farewell DM to ${member.user.tag}.`);
 
-            // Add a small, non-blocking delay to allow async operations to complete
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
 
         } catch (error) {
             console.error('An unexpected error occurred during guild member removal process:', error);
-            // If the bot is crashing, this log will help identify the source.
         }
     }
 
@@ -821,7 +809,10 @@ class PulchowkBot {
         );
     }
 
-    _scheduleJobs() {
+    async _scheduleJobs() {
+        schedule.scheduleJob('0 0 * * *', () => {
+            this._announceBirthdays();
+        });
         const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000');
         if (NOTICE_CHECK_INTERVAL_MS > 0) {
             console.log(`[Scheduler] Initializing notice checking. Interval: ${NOTICE_CHECK_INTERVAL_MS / 1000} seconds.`);
@@ -877,8 +868,9 @@ class PulchowkBot {
         let noticeChannel;
         try {
             noticeChannel = await this.client.channels.fetch(TARGET_NOTICE_CHANNEL_ID);
-            if (!noticeChannel || (noticeChannel.type === ChannelType.GuildText || noticeChannel.type === ChannelType.GuildAnnouncement)) {
-                console.error(`[Scheduler] Configured notice channel (${TARGET_NOTICE_CHANNEL_ID}) not found or is not a text/announcement channel.`);
+            console.log(noticeChannel);
+            if (!noticeChannel || !(noticeChannel.type === ChannelType.GuildText || noticeChannel.type === ChannelType.GuildAnnouncement)) {
+                console.error(`[Scheduler] Configured notice channel not found or is not a text/announcement channel.`);
                 return;
             }
         } catch (error) {
@@ -1217,14 +1209,8 @@ class PulchowkBot {
         }
     }
 
-    _scheduleJobs() {
-        schedule.scheduleJob('0 0 * * *', () => {
-            this._announceBirthdays();
-        });
-    }
-
     start() {
-        this.client.login(this.token);
+        this.client.login(this.token).catch(console.error);
     }
 }
 

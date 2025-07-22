@@ -172,13 +172,15 @@ const otpEmailTemplate = `
                 {{OTP_CODE}}
             </div>
             <p>This OTP is valid for <strong>5 minutes</strong>. Do not share this code with anyone.</p>
+            <center>
             <div class="button-container">
                 <a href="https://discord.gg/YaQxWnqJVx" class="button">🔗 Join Our Discord Server</a>
             </div>
+            </center>
             <p class="important-note">If you did not request this OTP, please ignore this email.</p>
         </div>
         <div class="footer">
-            <p>&copy; 2025 Your Bot Name. All rights reserved.</p>
+            <p>&copy; 2025 FSU Bot. All rights reserved.</p>
             <p>This is an automated message, please do not reply.</p>
         </div>
     </div>
