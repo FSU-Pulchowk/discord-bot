@@ -58,126 +58,137 @@ export async function execute(interaction) {
     });
 
     collector.on('collect', async i => {
+        // Essential check: If already replied or deferred, skip to prevent "Interaction already acknowledged"
+        if (i.replied || i.deferred) {
+            console.warn(`[Suggest] Interaction ${i.customId} already acknowledged. Skipping.`);
+            return;
+        }
+
         if (i.user.id !== interaction.user.id) {
-        return i.reply({ content: 'You cannot use these buttons.', ephemeral: true }).catch(() => {});
+            return i.reply({ content: 'You cannot use these buttons.', ephemeral: true }).catch(() => {});
         }
 
-        let deferred = false;
         try {
-        await i.deferUpdate();
-        deferred = true;
+            await i.deferUpdate(); // Acknowledge the button interaction
         } catch (err) {
-        if (err.code === 10062) {
-            console.warn('❗ Button interaction expired.');
-            return;
-        } else if (err.code === 40060) {
-            console.warn('❗ Button interaction already acknowledged.');
-            deferred = true;
-        } else {
-            console.error('❌ Unknown error during deferUpdate():', err);
-            return;
-        }
+            if (err.code === 10062) {
+                console.warn('❗ [Suggest] Button interaction expired.');
+                return; // Interaction expired, no further action needed for this interaction
+            } else if (err.code === 40060) {
+                console.warn('❗ [Suggest] Button interaction already acknowledged.');
+                return; // Interaction already acknowledged, no further action needed
+            } else {
+                console.error('❌ [Suggest] Unknown error during deferUpdate():', err);
+                return;
+            }
         }
 
-        // Disable buttons immediately
         const disabledRow = new ActionRowBuilder().addComponents(
-        confirmButton.setDisabled(true),
-        cancelButton.setDisabled(true)
+            confirmButton.setDisabled(true),
+            cancelButton.setDisabled(true)
         );
-        await confirmationMessage.edit({ components: [disabledRow] }).catch(() => {});
+        // Safely edit the original confirmation message to disable buttons
+        await confirmationMessage.edit({ components: [disabledRow] }).catch(e => {
+            console.error('Error disabling buttons on confirmation message:', e);
+        });
 
         if (i.customId === 'cancel_suggestion') {
-        return interaction.followUp({
-            content: '❌ Your suggestion has been cancelled.',
-            ephemeral: true
-        }).catch(() => {});
+            return interaction.followUp({
+                content: '❌ Your suggestion has been cancelled.',
+                ephemeral: true
+            }).catch(() => {});
         }
 
         if (i.customId === 'confirm_suggestion') {
             const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
             if (!SUGGESTIONS_CHANNEL_ID) {
                 return interaction.followUp({
-                embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel is not configured.')],
-                ephemeral: true
+                    embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel is not configured.')],
+                    ephemeral: true
                 }).catch(() => {});
             }
 
             const suggestionsChannel = interaction.guild.channels.cache.get(SUGGESTIONS_CHANNEL_ID);
             if (!suggestionsChannel || suggestionsChannel.type !== ChannelType.GuildText) {
                 return interaction.followUp({
-                embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel not found or is not a text channel.')],
-                ephemeral: true
-                }).catch(() => {});
-            }
-
-        try {
-            const suggestionEmbed = new EmbedBuilder()
-            .setColor('#0099ff')
-            .setTitle('💡 New Suggestion')
-            .setDescription(suggestionText)
-            .addFields(
-                { name: 'Suggested By', value: interaction.user.tag, inline: true },
-                { name: 'Status', value: 'Pending', inline: true }
-            )
-            .setFooter({ text: `Suggestion ID: Pending | Votes: 👍 0 / 👎 0` })
-            .setTimestamp();
-
-            const sentMessage = await suggestionsChannel.send({ embeds: [suggestionEmbed] });
-            await sentMessage.react('👍');
-            await sentMessage.react('👎');
-
-            db.run(
-            `INSERT INTO suggestions (guild_id, message_id, user_id, suggestion_text, status, upvotes, downvotes, submitted_at)
-            VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
-            [guildId, sentMessage.id, userId, suggestionText, 'pending', Date.now()],
-            function (err) {
-                if (err) {
-                console.error('❌ DB error saving suggestion:', err.message);
-                sentMessage.delete().catch(() => {});
-                return interaction.followUp({
-                    embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Error saving your suggestion.')],
+                    embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Suggestion channel not found or is not a text channel.')],
                     ephemeral: true
                 }).catch(() => {});
-                }
+            }
 
-                const suggestionId = this.lastID;
-                const finalEmbed = EmbedBuilder.from(suggestionEmbed).setFooter({
-                text: `Suggestion ID: ${suggestionId} | Votes: 👍 0 / 👎 0`
-                });
+            try {
+                const suggestionEmbed = new EmbedBuilder()
+                    .setColor('#0099ff')
+                    .setTitle('💡 New Suggestion')
+                    .setDescription(suggestionText)
+                    .addFields(
+                        { name: 'Suggested By', value: interaction.user.tag, inline: true },
+                        { name: 'Status', value: 'Pending', inline: true }
+                    )
+                    .setFooter({ text: `Suggestion ID: Pending | Votes: 👍 0 / 👎 0` })
+                    .setTimestamp();
 
-                const deleteButton = new ButtonBuilder()
-                .setCustomId(`delete_suggestion_${suggestionId}`)
-                .setLabel('Delete')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('🗑️');
+                const sentMessage = await suggestionsChannel.send({ embeds: [suggestionEmbed] });
+                await sentMessage.react('👍');
+                await sentMessage.react('👎');
 
-                const suggestionRow = new ActionRowBuilder().addComponents(deleteButton);
-                sentMessage.edit({ embeds: [finalEmbed], components: [suggestionRow] }).catch(() => {});
+                db.run(
+                    `INSERT INTO suggestions (guild_id, message_id, user_id, suggestion_text, status, upvotes, downvotes, submitted_at)
+                    VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
+                    [guildId, sentMessage.id, userId, suggestionText, 'pending', Date.now()],
+                    function (err) {
+                        if (err) {
+                            console.error('❌ DB error saving suggestion:', err.message);
+                            sentMessage.delete().catch(() => {}); // Attempt to delete the partially sent message
+                            return interaction.followUp({
+                                embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Error saving your suggestion.')],
+                                ephemeral: true
+                            }).catch(() => {});
+                        }
 
+                        const suggestionId = this.lastID;
+                        const finalEmbed = EmbedBuilder.from(suggestionEmbed).setFooter({
+                            text: `Suggestion ID: ${suggestionId} | Votes: 👍 0 / 👎 0`
+                        });
+
+                        const deleteButton = new ButtonBuilder()
+                            .setCustomId(`delete_suggestion_${suggestionId}`)
+                            .setLabel('Delete')
+                            .setStyle(ButtonStyle.Danger)
+                            .setEmoji('🗑️');
+
+                        const suggestionRow = new ActionRowBuilder().addComponents(deleteButton);
+                        sentMessage.edit({ embeds: [finalEmbed], components: [suggestionRow] }).catch(e => {
+                            console.error('Error editing sent suggestion message with final ID and delete button:', e);
+                        });
+
+                        interaction.followUp({
+                            embeds: [new EmbedBuilder().setColor('#00FF00').setDescription(`✅ Your suggestion #${suggestionId} was posted in <#${SUGGESTIONS_CHANNEL_ID}>.`)],
+                            ephemeral: true
+                        }).catch(() => {});
+                    }
+                );
+            } catch (err) {
+                console.error('❌ Failed to post suggestion:', err);
                 interaction.followUp({
-                embeds: [new EmbedBuilder().setColor('#00FF00').setDescription(`✅ Your suggestion #${suggestionId} was posted in <#${SUGGESTIONS_CHANNEL_ID}>.`)],
-                ephemeral: true
+                    embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ An error occurred while posting your suggestion.')],
+                    ephemeral: true
                 }).catch(() => {});
             }
-            );
-        } catch (err) {
-            console.error('❌ Failed to post suggestion:', err);
-            interaction.followUp({
-            embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ An error occurred while posting your suggestion.')],
-            ephemeral: true
-            }).catch(() => {});
-        }
         }
     });
 
     collector.on('end', async collected => {
         if (collected.size === 0) {
             try {
-                await confirmationMessage.edit({
-                content: '⌛ You did not respond in time. Suggestion cancelled.',
-                embeds: [],
-                components: []
-                });
+                // Ensure the original message can be edited and is not already deleted/expired
+                if (!confirmationMessage.deleted) {
+                    await confirmationMessage.edit({
+                        content: '⌛ You did not respond in time. Suggestion cancelled.',
+                        embeds: [],
+                        components: []
+                    });
+                }
             } catch (e) {
                 console.warn('⚠️ Could not edit message after collector timeout:', e);
             }

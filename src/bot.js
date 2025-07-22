@@ -185,6 +185,13 @@ class PulchowkBot {
         }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
+            // The 'suggest' command handles its own deferUpdate for confirm/cancel buttons, so we return here.
+            // This prevents "Interaction already acknowledged" errors if the suggest command tries to defer and bot.js tries to defer.
+            if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
+                // The 'suggest' command's collector handles these, no need for bot.js to defer/reply.
+                return;
+            }
+
             if (customId.startsWith('verify_start_button_')) {
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
@@ -231,11 +238,19 @@ class PulchowkBot {
                 }
                 return;
             }
-
-            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }).catch(e => {
-                console.error("Error deferring button interaction:", e);
-                return;
-            });
+            
+            // Defer reply for other buttons if not already replied/deferred
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.deferReply({ ephemeral: true }).catch(e => {
+                    // Check for 10062 (Unknown interaction) if the interaction has expired
+                    if (e.code === 10062) {
+                        console.warn(`❗ [Bot] Interaction ${interaction.customId} expired before deferring.`);
+                    } else {
+                        console.error("Error deferring button interaction:", e);
+                    }
+                    return; // Stop execution if deferring failed
+                });
+            }
 
             if (customId.startsWith('confirm_setup_fsu_') || customId.startsWith('cancel_setup_fsu_')) {
                 const setupFSUCommand = this.client.commands.get('setupfsu');
@@ -271,9 +286,13 @@ class PulchowkBot {
                 return;
             }
             else if (customId.startsWith('delete_suggestion_')) {
+                // _handleSuggestionDelete will defer itself if not already deferred,
+                // but we already deferred above for general buttons.
+                // We ensure no double deferring happens inside _handleSuggestionDelete.
                 await this._handleSuggestionDelete(interaction);
                 return;
             }
+            // If the interaction reached here and was deferred but not handled by specific logic
             if (interaction.deferred || interaction.replied) {
                 await interaction.editReply({ content: '❌ Unknown button interaction.' }).catch(e => console.error("Error editing reply for unknown button:", e));
             }
@@ -740,76 +759,112 @@ class PulchowkBot {
         }
     }
 
+    /**
+     * @private
+     * Handles the deletion of a suggestion.
+     * @param {import('discord.js').ButtonInteraction} interaction The button interaction.
+     */
     async _handleSuggestionDelete(interaction) {
         const customIdParts = interaction.customId.split('_');
         const suggestionId = customIdParts[2];
         const db = this.client.db;
         const guild = interaction.guild;
 
-        if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply({ ephemeral: true });
+        // The interaction should already be deferred by _onInteractionCreate if it got here,
+        // so no need to defer again. Just ensure it's deferred or replied.
+        if (!interaction.replied && !interaction.deferred) {
+            // This case should ideally not be hit if _onInteractionCreate defers universally.
+            // But as a fallback for specific scenarios or if _onInteractionCreate changes,
+            // we can add a defer here too. For now, assuming it's already handled.
+            console.warn(`[Bot] _handleSuggestionDelete called with non-deferred interaction ${interaction.customId}. Deferring now.`);
+            await interaction.deferReply({ ephemeral: true }).catch(e => {
+                if (e.code === 10062) {
+                    console.warn(`❗ [Bot] Interaction ${interaction.customId} expired before deferring in _handleSuggestionDelete.`);
+                } else {
+                    console.error("Error deferring reply in _handleSuggestionDelete:", e);
+                }
+                return; // Stop execution if deferring failed
+            });
         }
-
+        
         try {
             const suggestion = await new Promise((resolve, reject) => {
                 db.get(`SELECT user_id, message_id FROM suggestions WHERE id = ? AND guild_id = ?`, [suggestionId, guild.id], (err, row) => {
                     if (err) {
-                        console.error('Error fetching suggestion to delete:', err.message);
-                        reject(new Error('An error occurred while trying to find the suggestion.'));
-                    } else {
-                        resolve(row);
+                        console.error('Error fetching suggestion from DB:', err.message);
+                        return reject(new Error('A database error occurred.'));
                     }
+                    resolve(row);
                 });
             });
+
             if (!suggestion) {
-                return interaction.editReply({ content: '❌ This suggestion could not be found. It might have already been deleted.' });
+                return interaction.editReply({ content: '❌ This suggestion could not be found. It may have already been deleted.' });
             }
             const hasAdminPerms = interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages) || this.developers.includes(interaction.user.id);
             if (interaction.user.id !== suggestion.user_id && !hasAdminPerms) {
                 return interaction.editReply({ content: '🚫 You do not have permission to delete this suggestion.' });
             }
-            const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
-            if (!SUGGESTIONS_CHANNEL_ID) {
-                console.error('SUGGESTIONS_CHANNEL_ID is not set in the environment variables.');
-                return interaction.editReply({ content: '❌ The suggestions channel is not configured correctly.' });
-            }
-
-            const suggestionsChannel = await guild.channels.fetch(SUGGESTIONS_CHANNEL_ID).catch(() => null);
-            if (suggestionsChannel) {
-                await suggestionsChannel.messages.fetch(suggestion.message_id).then(msg => msg.delete()).catch(() => {
-                    console.warn(`Suggestion message ${suggestion.message_id} not found or could not be deleted.`);
-                });
+            const suggestionsChannelId = process.env.SUGGESTIONS_CHANNEL_ID;
+            if (suggestionsChannelId) {
+                const suggestionsChannel = await guild.channels.fetch(suggestionsChannelId).catch(() => null);
+                if (suggestionsChannel) {
+                    await suggestionsChannel.messages.delete(suggestion.message_id).catch(() => {
+                        console.warn(`Suggestion message ${suggestion.message_id} was not found in the channel or could not be deleted.`);
+                    });
+                }
+            } else {
+                console.error('SUGGESTIONS_CHANNEL_ID is not set. Cannot delete message.');
             }
 
             await new Promise((resolve, reject) => {
                 db.run(`DELETE FROM suggestions WHERE id = ?`, [suggestionId], (err) => {
                     if (err) {
                         console.error('Error deleting suggestion from DB:', err.message);
-                        reject(new Error('An error occurred while deleting the suggestion from the database.'));
-                    } else {
-                        resolve();
+                        return reject(new Error('An error occurred while deleting the suggestion from the database.'));
                     }
+                    resolve();
                 });
             });
             await interaction.editReply({ content: `✅ Suggestion #${suggestionId} has been successfully deleted.` });
-            const logEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('Suggestion Deleted')
-                .addFields(
-                    { name: 'Suggestion ID', value: suggestionId, inline: true },
-                    { name: 'Deleted By', value: interaction.user.tag, inline: true },
-                    { name: 'Original Suggester ID', value: suggestion.user_id, inline: true }
-                )
-                .setTimestamp();
             const logChannelId = process.env.ADMIN_LOG_CHANNEL_ID;
-            if(logChannelId) {
-               const logChannel = await guild.channels.fetch(logChannelId).catch(() => null);
-               if(logChannel) logChannel.send({ embeds: [logEmbed] });
+            if (logChannelId) {
+                const logChannel = await guild.channels.fetch(logChannelId).catch(() => null);
+                if (logChannel) {
+                    const logEmbed = new EmbedBuilder()
+                        .setColor('#FF0000')
+                        .setTitle('Suggestion Deleted')
+                        .addFields(
+                            { name: 'Suggestion ID', value: suggestionId, inline: true },
+                            { name: 'Deleted By', value: interaction.user.tag, inline: true },
+                            { name: 'Original Suggester', value: `<@${suggestion.user_id}>`, inline: true }
+                        )
+                        .setTimestamp();
+                    await logChannel.send({ embeds: [logEmbed] });
+                }
             }
         } catch (error) {
-            console.error('Error during suggestion deletion process:', error);
-            if (!interaction.replied) {
-            await interaction.editReply({ content: `❌ A critical error occurred: ${error.message}` });
+            console.error('A critical error occurred during the suggestion deletion process:', error);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: `❌ A critical error occurred: ${error.message}`, ephemeral: true }).catch(e => console.error("Error sending final error reply:", e));
+            } else {
+                try {
+                    await interaction.editReply({ content: `❌ A critical error occurred: ${error.message}` });
+                } catch (editError) {
+                    if (editError.code === 10008) {
+                        console.warn("⚠️ Interaction reply message was already deleted. Attempting to send a follow-up instead.");
+                        try {
+                            await interaction.followUp({
+                                content: `❌ A critical error occurred: ${error.message}`,
+                                ephemeral: true
+                            });
+                        } catch (followUpError) {
+                            console.error("Failed to send follow-up error message:", followUpError);
+                        }
+                    } else {
+                        console.error("Unexpected error while editing error reply:", editError);
+                    }
+                }
             }
         }
     }
@@ -880,7 +935,12 @@ class PulchowkBot {
                             message.channel.send(`🔇 Anti-spam: ${message.author.tag} is spamming but I cannot mute them. (Warning ${currentWarnings}/${kick_threshold})`).catch(e => console.error("Error sending mute failure message:", e));
                         }
                     }
-                    await message.channel.bulkDelete(userData.count, true).catch(e => console.error('Error bulk deleting messages:', e));
+                    // Attempt to delete messages related to the spam. userData.count might be slightly off if messages are deleted very quickly.
+                    if (message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
+                        await message.channel.bulkDelete(Math.min(userData.count, 100), true).catch(e => console.error('Error bulk deleting messages:', e));
+                    } else {
+                        console.warn(`Bot lacks 'Manage Messages' permission to delete spam messages in channel ${message.channel.name}.`);
+                    }
                     this.spamMap.delete(userId);
                 }
             }
@@ -1088,7 +1148,7 @@ class PulchowkBot {
                                             console.log(`[Debug] PDF ${fileName} has ${totalPdfPages} pages using pdfjs-dist.`);
                                         } catch (pdfjsError) {
                                             console.warn(`[Warning] Could not get page count for PDF ${fileName} using pdfjs-dist:`, pdfjsError.message);
-                                            totalPdfPages = MAX_PDF_PAGES_TO_CONVERT;
+                                            totalPdfPages = MAX_PDF_PAGES_TO_CONVERT; // Fallback to max pages if page count detection fails
                                         }
 
                                         const pdfConvertOptions = {
