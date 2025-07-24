@@ -2,10 +2,10 @@ import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 
 export const data = new SlashCommandBuilder()
     .setName('setbirthday')
-    .setDescription('Sets your birthday (MM/DD or MM/DD/YYYY) for announcements.')
+    .setDescription('Sets your birthday (YYYY/MM/DD) for announcements.')
     .addStringOption(option =>
         option.setName('date')
-            .setDescription('Your birthday in MM/DD or MM/DD/YYYY format (e.g., 01/15 or 05/20/2000)')
+            .setDescription('Your birthday in YYYY/MM/DD format (e.g. 05/20/2000 AD)')
             .setRequired(true))
     .setDMPermission(false); 
 
@@ -21,9 +21,9 @@ export async function execute(interaction) {
         return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`❌ Invalid date format. Please use MM/DD or MM/DD/YYYY.`)], ephemeral: true });
     }
 
-    const month = parseInt(parts[0]);
-    const day = parseInt(parts[1]);
-    const year = parts.length === 3 ? parseInt(parts[2]) : null;
+    const month = parseInt(parts[1]);
+    const day = parseInt(parts[2]);
+    const year = parts.length === 3 ? parseInt(parts[0]) : null;
 
     if (isNaN(month) || month < 1 || month > 12) {
         return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`❌ Invalid month. Month must be between 1 and 12.`)], ephemeral: true });

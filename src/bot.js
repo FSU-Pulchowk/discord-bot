@@ -1049,38 +1049,25 @@ class PulchowkBot {
                 return;
             }
 
-            let latestDate = null;
-            scrapedNotices.forEach(notice => {
-                const noticeDate = new Date(notice.date);
-                if (isNaN(noticeDate.getTime())) {
-                    console.warn(`[Scheduler] Invalid date format for notice: ${notice.title} - ${notice.date}`);
-                    return;
-                }
-                if (!latestDate || noticeDate > latestDate) {
-                    latestDate = noticeDate;
-                }
-            });
-
-            if (!latestDate) {
-                console.log('[Scheduler] No valid dates found in scraped notices.');
-                return;
-            }
-            console.log(`[Scheduler] Latest date found in notices: ${latestDate.toISOString().split('T')[0]}`);
-
+            const MAX_NOTICE_AGE_DAYS = parseInt(process.env.MAX_NOTICE_AGE_DAYS || '30', 10);
+            const now = new Date();
 
             const noticesToAnnounce = scrapedNotices.filter(notice => {
                 const noticeDate = new Date(notice.date);
-                return noticeDate.getFullYear() === latestDate.getFullYear() &&
-                    noticeDate.getMonth() === latestDate.getMonth() &&
-                    noticeDate.getDate() === latestDate.getDate();
+                if (isNaN(noticeDate.getTime())) {
+                    console.warn(`[Scheduler] Invalid date format for notice: ${notice.title} - ${notice.date}`);
+                    return false;
+                }
+
+                const ageInDays = (now - noticeDate) / (1000 * 60 * 60 * 24);
+                return ageInDays <= MAX_NOTICE_AGE_DAYS;
             });
 
             if (noticesToAnnounce.length === 0) {
-                console.log('[Scheduler] No notices found for the latest date.');
+                console.log(`[Scheduler] No notices found in the last ${MAX_NOTICE_AGE_DAYS} days.`);
                 return;
             }
-            console.log(`[Scheduler] Found ${noticesToAnnounce.length} notices to announce for the latest date.`);
-
+            console.log(`[Scheduler] Found ${noticesToAnnounce.length} notices to announce from the past ${MAX_NOTICE_AGE_DAYS} days.`);
 
             for (const notice of noticesToAnnounce) {
                 if (!notice || !notice.title || !notice.link) {
@@ -1088,7 +1075,6 @@ class PulchowkBot {
                     continue;
                 }
 
-                // Use this.client.db here
                 const row = await new Promise((resolve, reject) => {
                     this.client.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
                         if (err) reject(err);
@@ -1134,7 +1120,7 @@ class PulchowkBot {
                                     writer.on('error', reject);
                                 });
                                 
-                                const MAX_PDF_PAGES_TO_CONVERT = 5;
+                                const MAX_PDF_PAGES_TO_CONVERT = 10;
                                 if (fileName.toLowerCase().endsWith('.pdf')) {
                                     try {
                                         let totalPdfPages = 0;
@@ -1232,7 +1218,6 @@ class PulchowkBot {
                         }
                     }
                     
-                    // Use this.client.db here
                     await new Promise((resolve, reject) => {
                         this.client.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
                             [notice.title, notice.link, notice.date, Date.now()],

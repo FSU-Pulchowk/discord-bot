@@ -163,7 +163,7 @@ const otpEmailTemplate = `
     <div class="container">
         <div class="header">
             <h1>Verification Required</h1>
-            <img src="https://media.discordapp.net/attachments/712392381827121174/1397134640451424266/Screenshot_2025-07-10_195525.png?ex=68809e87&is=687f4d07&hm=0ca0477c5934535100e4fef0cfc8dd0871c27408c3665f1a7aec5a98c02ae02a" alt="Pulchowk Campus Banner" class="header-banner" width="600" height="120">
+            <img src="https://abhishekkharel.com.np/banner/fsu-banner.png" alt="Pulchowk Campus Banner" class="header-banner" width="600" height="120">
         </div>
         <div class="content">
             <p>Hello, {{USER_REAL_NAME}}!</p>
@@ -173,9 +173,9 @@ const otpEmailTemplate = `
             </div>
             <p>This OTP is valid for <strong>5 minutes</strong>. Do not share this code with anyone.</p>
             <center>
-            <div class="button-container">
-                <a href="https://discord.gg/YaQxWnqJVx" class="button">🔗 Join Our Discord Server</a>
-            </div>
+                <div class="button-container">
+                    <a href="https://discord.gg/YaQxWnqJVx" class="button">🔗 Join Our Discord Server</a>
+                </div>
             </center>
             <p class="important-note">If you did not request this OTP, please ignore this email.</p>
         </div>
@@ -210,7 +210,7 @@ function createVerifyModal() {
         .setCustomId('realNameInput')
         .setLabel('Your Full Real Name (as per college records)')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., Jane Doe')
+        .setPlaceholder('e.g., Ram Thapa Magar')
         .setMinLength(3)
         .setMaxLength(100)
         .setRequired(true);
@@ -219,16 +219,16 @@ function createVerifyModal() {
         .setCustomId('collegeEmailInput')
         .setLabel('Your Pulchowk Campus Email Address')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., your.name@pcampus.edu.np')
+        .setPlaceholder('e.g., rollno.name@pcampus.edu.np')
         .setMinLength(10)
         .setMaxLength(255)
         .setRequired(true);
 
     const birthdateInput = new TextInputBuilder()
         .setCustomId('birthdateInput')
-        .setLabel('Your Birthdate (YYYY-MM-DD)')
+        .setLabel('Your Birthdate (YYYY-MM-DD) ')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 2000-01-15')
+        .setPlaceholder('AD format e.g., 2000-01-15')
         .setMinLength(10)
         .setMaxLength(10)
         .setRequired(true);

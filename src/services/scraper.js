@@ -173,7 +173,6 @@ export async function scrapePcampusNotice() {
         const listData = await fetchWithRetry(listUrl);
         const $list = cheerio.load(listData);
         const latestArticle = $list("article").first();
-
         const title = latestArticle.find("h2.entry-title a").text().trim();
         const pageLink = latestArticle.find("h2.entry-title a").attr("href");
         const date = latestArticle.find("time.entry-date").attr("datetime");
