@@ -14,17 +14,17 @@ This bot offers a wide range of functionalities to manage and enhance Discord se
 **Moderation & Administration:**
 
   - **Anti-Spam System:** Automatically detects and takes action (mute, kick, ban) against spamming users based on configurable thresholds.
-  - **Warnings (`/warn`):** Records warnings for users in the database.
+  - **Warnings (`/warn`):** Records warnings for users in the database, with a confirmation box before execution and an option to reset warnings.
   - **Kick (`/kick`):** Kicks a user from the server.
   - **Ban (`/ban`):** Bans a user from the server.
   - **Timeout (`/timeout`):** Temporarily mutes a user.
-  - **Nuke (`/nuke`):** (Extreme caution\!) Deletes all channels and roles in the server (except the command channel).
   - **Setup FSU (`/setupfsu`):** Creates a basic set of FSU-related roles, categories, and channels for quick server setup.
   - **Admin Tasks (`/addtask`, `/listtasks`, `/completetask`):** Manage administrative to-do items.
   - **Verified Users List (`/gotverified`):** Displays a list of verified users with their real names and college email addresses (Admin/Moderator only).
 
 **Community Engagement & Information:**
 
+  - **Leveling/XP System:** Awards experience points (XP) for messages sent and voice chat activity, allowing users to level up and gain recognition.
   - **Suggestions (`/suggest`, `/approvesuggestion`, `/denysuggestion`, `/listsuggestions`):** Allows members to submit suggestions and administrators to review them.
   - **Reaction Roles (`/setreactionrole`, `/removereactionrole`):** Enables users to assign themselves roles by reacting to specific messages.
   - **FAQs (`/addfaq`, `/getfaq`, `/removefaq`):** Create and retrieve frequently asked questions.
@@ -44,6 +44,7 @@ This bot offers a wide range of functionalities to manage and enhance Discord se
 ## 📂 Project Structure
 
 ```
+
 .
 ├── .env.example          (Environment variables for configuration)
 ├── package.json          (Project metadata and dependencies)
@@ -51,57 +52,57 @@ This bot offers a wide range of functionalities to manage and enhance Discord se
 ├── deploy-commands.js    (Script to register Discord slash commands)
 ├── Dockerfile            (Instructions for building the Docker image)
 ├── docker-compose.yml    (Configuration for running the bot with Docker Compose)
-├── LICENSE               (Information about the project's license)
+├── https://www.google.com/search?q=LICENSE               (Information about the project's license)
 └── src/                  (Main source code directory)
-    ├── bot.js                (Main bot file: initializes client, loads commands, sets up events, schedules scraper)
-    ├── database.js           (Handles SQLite DB connection and table creation)
-    ├── services/             (External service integrations)
-    │   ├── emailService.js       (Google Gmail API integration for OTP)
-    │   └── scraper.js            (Core web scraping logic for FSU notices/holidays)
-    ├── commands/         (Bot commands, categorized by type)
-    │   └── slash/            (For Discord Slash Commands)
-    │       ├── addFaq.js
-    │       ├── addTask.js
-    │       ├── allRoles.js
-    │       ├── approveSuggestion.js
-    │       ├── assignRole.js
-    │       ├── ban.js
-    │       ├── completeTask.js
-    │       ├── confirmotp.js
-    │       ├── denySuggestion.js
-    │       ├── getFaq.js
-    │       ├── gotVerified.js  
-    │       ├── help.js         
-    │       ├── holidays.js
-    │       ├── kick.js
-    │       ├── links.js
-    │       ├── listSuggestions.js
-    │       ├── listTasks.js
-    │       ├── myStats.js
-    │       ├── news.js
-    │       ├── nuke.js
-    │       ├── removeBirthday.js
-    │       ├── removeFaq.js
-    │       ├── removeReactionRole.js
-    │       ├── removeRole.js
-    │       ├── roles.js
-    │       ├── setAntiSpam.js
-    │       ├── setBirthday.js
-    │       ├── setReactionRole.js
-    │       ├── setupFSU.js
-    │       ├── setWelcome.js
-    │       ├── suggest.js
-    │       ├── timeout.js
-    │       ├── topChatters.js
-    │       ├── topVoice.js
-    │       ├── viewAntiSpam.js
-    |       ├── verify.js
-    │       └── warn.js
-    └── utils/
-        ├── Command.js             (Base class for prefix commands)
-        ├── CommandHandler.js      (Manages prefix command execution, includes verified role check)
-        └── otpGenerator.js        (Utility for generating One-Time Passwords)
-```
+├── bot.js                (Main bot file: initializes client, loads commands, sets up events, schedules scraper)
+├── database.js           (Handles SQLite DB connection and table creation)
+├── services/             (External service integrations)
+│   ├── emailService.js       (Google Gmail API integration for OTP)
+│   └── scraper.js            (Core web scraping logic for FSU notices/holidays)
+├── commands/         (Bot commands, categorized by type)
+│   └── slash/            (For Discord Slash Commands)
+│       ├── addFaq.js
+│       ├── addTask.js
+│       ├── allRoles.js
+│       ├── approveSuggestion.js
+│       ├── assignRole.
+│       ├── ban.js
+│       ├── completeTask.js
+│       ├── confirmotp.js
+│       ├── denySuggestion.js
+│       ├── getFaq.js
+│       ├── gotVerified.js  
+│       ├── help.js  
+│       ├── holidays.js
+│       ├── kick.js
+│       ├── links.js
+│       ├── listSuggestions.js
+│       ├── listTasks.js
+│       ├── myStats.js
+│       ├── news.js
+│       ├── removeBirthday.js
+│       ├── removeFaq.js
+│       ├── removeReactionRole.js
+│       ├── removeRole.js
+│       ├── roles.js
+│       ├── setAntiSpam.js
+│       ├── setBirthday.js
+│       ├── setReactionRole.js
+│       ├── setupFSU.js
+│       ├── setWelcome.js
+│       ├── suggest.js
+│       ├── timeout.js
+│       ├── topChatters.js
+│       ├── topVoice.js
+│       ├── viewAntiSpam.js
+|       ├── verify.js
+│       └── warn.js
+└── utils/
+├── Command.js             (Base class for prefix commands)
+├── CommandHandler.js      (Manages prefix command execution, includes verified role check)
+└── otpGenerator.js        (Utility for generating One-Time Passwords)
+
+````
 
 ## 🚀 Getting Started
 
@@ -147,17 +148,17 @@ Follow these steps to get Pulchowk Discord Bot up and running.
 4.  **Get Client ID:**
       - Go to the "General Information" tab. Copy the "Application ID". This is `CLIENT_ID`.
 5.  **Get Guild ID (for testing):**
-      - In Discord server, enable "Developer Mode" (User Settings -\> Advanced).
+      - In Discord server, enable "Developer Mode" (User Settings -> Advanced).
       - Right-click on server icon in Discord and select "Copy ID". This is `GUILD_ID`.
 6.  **Invite the Bot to Server:**
-      - Go to the "OAuth2" -\> "URL Generator" tab.
+      - Go to the "OAuth2" -> "URL Generator" tab.
       - Select `bot` and `applications.commands` scopes.
       - Under "Bot Permissions", select the following:
           - `Administrator` (simplest for full functionality, but grant specific permissions for production if you prefer)
           - Alternatively, grant specific permissions: `Manage Roles`, `Kick Members`, `Ban Members`, `Moderate Members`, `Manage Channels`, `Read Messages/View Channels`, `Send Messages`, `Embed Links`, `Attach Files`, `Add Reactions`, `Use External Emojis`, `Read Message History`, `Connect`, `Speak`, `Mute Members`, `Deafen Members`, `Move Members`.
       - Copy the generated URL and paste it into browser to invite the bot.
 7.  **Create a "Verified" Role:**
-      - In Discord server, go to Server Settings -\> Roles.
+      - In Discord server, go to Server Settings -> Roles.
       - Create a new role named "Verified" (or anything you prefer).
       - **Copy its ID:** Right-click the role and select "Copy ID". This is `VERIFIED_ROLE_ID`. Ensure this role is positioned **below** bot's role in the server's role hierarchy so the bot can assign it.
 
@@ -169,19 +170,19 @@ This bot uses Google APIs for email verification and holiday announcements.
       - Go to the [Google Cloud Console](https://console.cloud.google.com/).
       - Create a new project or select an existing one.
 2.  **Enable APIs:**
-      - In project, navigate to "APIs & Services" -\> "Enabled APIs & Services".
+      - In project, navigate to "APIs & Services" -> "Enabled APIs & Services".
       - Click "+ ENABLE APIS AND SERVICES".
       - Search for and enable:
           - **Gmail API** (for sending OTP emails)
           - **Google Calendar API** (for `/holidays` command)
 3.  **Create OAuth Consent Screen:**
-      - Go to "APIs & Services" -\> "OAuth consent screen".
+      - Go to "APIs & Services" -> "OAuth consent screen".
       - Configure it (choose "External" for personal use, fill in required info).
       - Add `https://www.googleapis.com/auth/gmail.send` as a scope.
       - Add `https://www.googleapis.com/auth/calendar.readonly` as a scope.
       - Add email as a test user.
 4.  **Create OAuth 2.0 Client ID (for Gmail API):**
-      - Go to "APIs & Services" -\> "Credentials".
+      - Go to "APIs & Services" -> "Credentials".
       - Click "+ CREATE CREDENTIALS" and choose "OAuth client ID".
       - Select "Desktop app" as the application type.
       - Copy `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
@@ -195,12 +196,12 @@ This bot uses Google APIs for email verification and holiday announcements.
           - Set `REDIRECT_URI` in `.env` to `https://developers.google.com/oauthplayground` (or custom URI if you set one up).
       - Set `SENDER_EMAIL` in `.env` to the email address you want the OTPs to be sent from (must be associated with Google Workspace account).
 5.  **Create Service Account Key (for Google Calendar API - Optional but Recommended):**
-      - Go to "APIs & Services" -\> "Credentials".
+      - Go to "APIs & Services" -> "Credentials".
       - Click "+ CREATE CREDENTIALS" and choose "Service Account".
       - Follow the steps to create a new service account.
       - Grant it the "Calendar Viewer" role (or a custom role with `calendar.events.list` permission).
       - After creation, click on the service account email.
-      - Go to the "Keys" tab and click "ADD KEY" -\> "Create new key".
+      - Go to the "Keys" tab and click "ADD KEY" -> "Create new key".
       - Select "JSON" and click "CREATE". A JSON file will download.
       - **Rename this file to `service_account_key.json`** and place it in the **root directory of bot project**.
       - Set `GOOGLE_SERVICE_ACCOUNT_KEY_PATH="./service_account_key.json"` in `.env`.
@@ -226,7 +227,7 @@ GOOGLE_CLIENT_ID="_GOOGLE_CLIENT_ID_HERE"
 # GOOGLE_CLIENT_SECRET (from Google Cloud Console -> APIs & Services -> Credentials -> OAuth 2.0 Client IDs)
 GOOGLE_CLIENT_SECRET="_GOOGLE_CLIENT_SECRET_HERE"
 # Redirect URI used during OAuth2 consent screen setup (e.g., [https://developers.google.com/oauthplayground](https://developers.google.com/oauthplayground))
-REDIRECT_URI="https://developers.google.com/oauthplayground" # Or custom redirect URI
+REDIRECT_URI="[https://developers.google.com/oauthplayground](https://developers.google.com/oauthplayground)" # Or custom redirect URI
 # Refresh Token generated from OAuth2 Playground with [https://www.googleapis.com/auth/gmail.send](https://www.googleapis.com/auth/gmail.send) scope
 REFRESH_TOKEN="_GOOGLE_REFRESH_TOKEN_HERE"
 # The email address from college Workspace that will send the OTP emails
@@ -257,7 +258,7 @@ BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID="_BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID_HERE"
 
 # --- Bot Prefix for traditional commands (e.g., !help) ---
 BOT_PREFIX="!"
-```
+````
 
 ### 4\. Installation
 
@@ -329,7 +330,6 @@ npm start
 | `/kick @user [reason]` | Kicks a user from the server (Moderator). | `/kick @User Rule break` |
 | `/timeout @user <duration> [reason]` | Times out a user (Moderator). | `/timeout @User 5m Misbehaving` |
 | `/warn @user [reason]` | Issues a warning to a user (Moderator). | `/warn @User Off-topic` |
-| `/nuke` | **(EXTREME CAUTION\!)** Deletes all channels and roles. Requires confirmation. (Server Owner Only) | `/nuke` |
 | `/setantispam [setting <value>] ...` | Configures anti-spam settings (Admin). | `/setantispam message_limit 7 time_window_seconds 10` |
 | `/viewantispam` | Views current anti-spam settings (Admin). | `/viewantispam` |
 | `/gotverified` | Displays a list of verified users with their real names and college email addresses (Admin/Moderator).
@@ -434,7 +434,7 @@ To host your Pulchowk Discord Bot on a local server using Docker, follow these s
     VERIFIED_ROLE_ID="_VERIFIED_ROLE_ID_HERE"
     GOOGLE_CLIENT_ID="_GOOGLE_CLIENT_ID_HERE"
     GOOGLE_CLIENT_SECRET="_GOOGLE_CLIENT_SECRET_HERE"
-    REDIRECT_URI="https://developers.google.com/oauthplayground"
+    REDIRECT_URI="[https://developers.google.com/oauthplayground](https://developers.google.com/oauthplayground)"
     REFRESH_TOKEN="_GOOGLE_REFRESH_TOKEN_HERE"
     SENDER_EMAIL="-college-email@pulchowk.edu.np"
     GOOGLE_SERVICE_ACCOUNT_KEY_PATH="./service_account_key.json"
@@ -560,5 +560,6 @@ Contributions are welcome\! If you have suggestions for improvements or new feat
   - Open a Pull Request.
 
 ## 📄 License
-
-This project is licensed under the [No Redistribution License](LICENSE).
+```
+This project is licensed under the [No Redistribution License](https://www.google.com/search?q=LICENSE).
+```
