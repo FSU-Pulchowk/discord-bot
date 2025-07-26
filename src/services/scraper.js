@@ -164,47 +164,52 @@ export async function scrapeIoeExamNotice() {
 }
 
 /**
- * Scrapes the latest notice from the Pulchowk Campus website.
- * @returns {Promise<object|null>} - A single notice object or null on failure.
+ * Scrapes all recent notices from the Pulchowk Campus website's homepage widget.
+ * @returns {Promise<Array<object>>} - A list of notice objects.
  */
 export async function scrapePcampusNotice() {
-    const listUrl = "https://pcampus.edu.np/category/general-notices/";
+    const listUrl = "https://pcampus.edu.np/";
     try {
         const listData = await fetchWithRetry(listUrl);
         const $list = cheerio.load(listData);
-        const latestArticle = $list("article").first();
-        const title = latestArticle.find("h2.entry-title a").text().trim();
-        const pageLink = latestArticle.find("h2.entry-title a").attr("href");
-        const date = latestArticle.find("time.entry-date").attr("datetime");
-        const postId = latestArticle.attr("id");
-
-        if (!pageLink) {
-        console.warn("[scrapePcampusNotice] No page link found in latest article.");
-        return null;
+        const noticeItems = $list("#recent-posts-2 ul li"); 
+        if (noticeItems.length === 0) {
+            console.warn("[scrapePcampusNotice] Could not find any notices in the widget.");
+            return []; 
         }
-
-        const pageData = await fetchWithRetry(pageLink);
-        const $page = cheerio.load(pageData);
-        const attachments = [];
-
-        $page(".entry-content a").each((_, el) => {
-        const href = $page(el).attr("href");
-        if (href?.includes("/wp-content/uploads/")) {
-            attachments.push(new URL(href, pageLink).href);
-        }
+        const noticeDetailPromises = [];
+        noticeItems.each((_, el) => {
+            const item = $list(el);
+            const titleElement = item.find("a");
+            const pageLink = titleElement.attr("href");
+            const title = titleElement.text().trim();
+            const date = item.find(".post-date").text().trim(); 
+            if (pageLink) {
+                const detailPromise = (async () => {
+                    try {
+                        const pageData = await fetchWithRetry(pageLink);
+                        const $page = cheerio.load(pageData);
+                        const attachments = [];
+                        $page(".entry-content a").each((_, a) => {
+                            const href = $page(a).attr("href");
+                            if (href?.includes("/wp-content/uploads/")) {
+                                attachments.push(new URL(href, pageLink).href);
+                            }
+                        });
+                        return { title, link: pageLink, attachments: [...new Set(attachments)], date, source: "Pulchowk Campus" };
+                    } catch (err) {
+                        console.error(`[scrapePcampusNotice] Failed to fetch details for ${pageLink}. Error: ${err.message}`);
+                        return null; 
+                    }
+                })();
+                noticeDetailPromises.push(detailPromise);
+            }
         });
-
-        return {
-        id: postId,
-        title,
-        link: pageLink,
-        attachments: [...new Set(attachments)],
-        date,
-        source: "Pulchowk Campus",
-        };
+        const results = await Promise.all(noticeDetailPromises);
+        return results.filter(notice => notice !== null);
     } catch (err) {
         console.error("[scrapePcampusNotice] Error during scraping or parsing:", err.message);
-        return null;
+        return []; 
     }
 }
 
@@ -228,7 +233,7 @@ export async function scrapeLatestNotice() {
     }
 
     if (pcampus.status === 'fulfilled' && pcampus.value) {
-        combinedNotices = [...combinedNotices, pcampus.value];
+        combinedNotices = [...combinedNotices, ...pcampus.value];
     } else {
         console.error("[scrapeLatestNotice] Pulchowk Campus Notice scraping failed:", pcampus.reason);
     }
