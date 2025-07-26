@@ -97,8 +97,6 @@ export async function execute(interaction) {
             .setTitle(`🔒 ${interaction.user.tag}'s Private Stats`)
             .setDescription('This message contains sensitive or personal information.')
             .setTimestamp();
-        console.log(VERIFIED_ROLE_ID);
-        console.log(hasVerifiedRole);
         if (hasVerifiedRole) {
             const verifiedUserRow = await dbGet(
                 `SELECT real_name, email FROM verified_users WHERE user_id = ? AND guild_id = ?`,
