@@ -1,7 +1,12 @@
 FROM node:20-slim
+
 RUN groupadd -r botuser && useradd -r -g botuser -d /app -s /bin/bash botuser
+
+# Set the working directory inside the container
 WORKDIR /app
+
 RUN chown -R botuser:botuser /app
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         wget \
@@ -25,12 +30,18 @@ RUN apt-get update && \
         xdg-utils \
         chromium \
         graphicsmagick \
+        ghostscript \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
 COPY --chown=botuser:botuser package*.json ./
+
 USER botuser
+
 RUN npm ci --omit=dev && \
     npm cache clean --force
 COPY --chown=botuser:botuser . .
+
 CMD ["node", "./src/bot.js"]
