@@ -3,9 +3,9 @@ import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v9';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
-import { initializeDatabase, db } from './database.js'; // Assuming initializeDatabase and db are exported from database.js
+import { initializeDatabase, db } from './database.js';
 import { emailService } from './services/emailService.js';
-import { scrapeLatestNotice } from './services/scraper.js'; // Ensure this path is correct
+import { scrapeLatestNotice } from './services/scraper.js';
 import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
 import { fromPath } from 'pdf2pic';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -40,7 +40,6 @@ async function writeServiceAccountKey() {
 class PulchowkBot {
     constructor(token, dbInstance) {
         this.token = token;
-        // The dbInstance passed here is the actual database connection
         this.client = new Client({
             intents: [
                 IntentsBitField.Flags.Guilds,
@@ -60,7 +59,6 @@ class PulchowkBot {
             ]
         });
 
-        // Assign the dbInstance to the client object
         this.client.db = dbInstance; 
 
         this.client.commands = new Collection();
@@ -185,10 +183,7 @@ class PulchowkBot {
         }
         else if (interaction.isButton()) {
             const customId = interaction.customId;
-            // The 'suggest' command handles its own deferUpdate for confirm/cancel buttons, so we return here.
-            // This prevents "Interaction already acknowledged" errors if the suggest command tries to defer and bot.js tries to defer.
             if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
-                // The 'suggest' command's collector handles these, no need for bot.js to defer/reply.
                 return;
             }
 
@@ -239,16 +234,14 @@ class PulchowkBot {
                 return;
             }
             
-            // Defer reply for other buttons if not already replied/deferred
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.deferReply({ ephemeral: true }).catch(e => {
-                    // Check for 10062 (Unknown interaction) if the interaction has expired
                     if (e.code === 10062) {
                         console.warn(`❗ [Bot] Interaction ${interaction.customId} expired before deferring.`);
                     } else {
                         console.error("Error deferring button interaction:", e);
                     }
-                    return; // Stop execution if deferring failed
+                    return;
                 });
             }
 
@@ -286,13 +279,9 @@ class PulchowkBot {
                 return;
             }
             else if (customId.startsWith('delete_suggestion_')) {
-                // _handleSuggestionDelete will defer itself if not already deferred,
-                // but we already deferred above for general buttons.
-                // We ensure no double deferring happens inside _handleSuggestionDelete.
                 await this._handleSuggestionDelete(interaction);
                 return;
             }
-            // If the interaction reached here and was deferred but not handled by specific logic
             if (interaction.deferred || interaction.replied) {
                 await interaction.editReply({ content: '❌ Unknown button interaction.' }).catch(e => console.error("Error editing reply for unknown button:", e));
             }
@@ -316,11 +305,11 @@ class PulchowkBot {
                     await interaction.reply({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] });
                 }
                 return;
-            } else if (interaction.customId.startsWith('deny_reason_modal_')) { // Corrected customId check
+            } else if (interaction.customId.startsWith('deny_reason_modal_')) {
                 const suggestionId = interaction.customId.split('_')[3];
                 const reason = interaction.fields.getTextInputValue('denyReasonInput');
                 await this._processSuggestionDenial(interaction, suggestionId, reason);
-            } else if (interaction.customId.startsWith('delete_reason_modal_')) { // Corrected customId check
+            } else if (interaction.customId.startsWith('delete_reason_modal_')) {
                 const suggestionId = interaction.customId.split('_')[3];
                 const reason = interaction.fields.getTextInputValue('deleteReasonInput');
                 await this._processSuggestionDelete(interaction, suggestionId, reason);
@@ -334,9 +323,7 @@ class PulchowkBot {
         console.log(`User ${member.user.tag} (${member.user.id}) left guild ${member.guild.name} (${member.guild.id}).`);
 
         try {
-            // First, attempt to send farewell message to a designated channel (more reliable than DM)
             const row = await new Promise((resolve, reject) => {
-                // Use this.client.db here
                 this.client.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], (err, result) => {
                     if (err) reject(err);
                     else resolve(result);
@@ -370,7 +357,7 @@ class PulchowkBot {
             });
             console.log(`Successfully attempted to send farewell DM to ${member.user.tag}.`);
 
-            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
         } catch (error) {
             console.error('An unexpected error occurred during guild member removal process:', error);
@@ -383,7 +370,6 @@ class PulchowkBot {
         const currentTime = Date.now();
 
         if (!oldState.channelId && newState.channelId) {
-            // Use this.client.db here
             this.client.db.run(`INSERT OR REPLACE INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
                 [userId, guildId, newState.channelId, currentTime],
                 (err) => {
@@ -396,7 +382,6 @@ class PulchowkBot {
             );
         }
         else if (oldState.channelId && (!newState.channelId || oldState.channelId !== newState.channelId)) {
-            // Use this.client.db here
             this.client.db.get(`SELECT join_time FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], async (err, row) => {
                 if (err) {
                     console.error('Error fetching active voice session for update:', err.message);
@@ -407,7 +392,6 @@ class PulchowkBot {
                     const durationMinutes = Math.floor(durationMs / (1000 * 60));
 
                     if (durationMinutes > 0) {
-                        // Use this.client.db here
                         this.client.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 0, ?)
                                      ON CONFLICT(user_id, guild_id) DO UPDATE SET voice_time_minutes = voice_time_minutes + ?`,
                             [userId, guildId, durationMinutes, durationMinutes],
@@ -417,7 +401,6 @@ class PulchowkBot {
                             }
                         );
                     }
-                    // Use this.client.db here
                     this.client.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (deleteErr) => {
                         if (deleteErr) console.error('Error deleting active voice session:', deleteErr.message);
                         else console.log(`[Voice] Session for ${oldState.member.user.tag} ended/moved.`);
@@ -427,7 +410,6 @@ class PulchowkBot {
                 }
                 this.voiceStates.delete(userId);
                 if (newState.channelId) {
-                    // Use this.client.db here
                     this.client.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
                         [userId, guildId, newState.channelId, currentTime],
                         (err) => {
@@ -458,7 +440,6 @@ class PulchowkBot {
         const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
         const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
 
-        // Use this.client.db here
         this.client.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
             if (err) {
                 console.error('Error fetching welcome config:', err.message);
@@ -472,7 +453,6 @@ class PulchowkBot {
             let dmEmbed;
             let dmComponents = [];
 
-            // Use this.client.db here
             this.client.db.get(`SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`, [member.user.id, member.guild.id], async (err, verifiedRow) => {
                 if (err) {
                     console.error('Error checking verified_users table:', err.message);
@@ -568,7 +548,6 @@ class PulchowkBot {
         }
         if (user.bot || !reaction.message.guild) return;
 
-        // Use this.client.db here
         this.client.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
             [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
             async (err, row) => {
@@ -599,7 +578,6 @@ class PulchowkBot {
                             }
                         } else {
                             console.warn(`Configured role ${row.role_id} for reaction role not found in guild ${reaction.message.guild.name}. Deleting invalid entry.`);
-                            // Use this.client.db here
                             this.client.db.run(`DELETE FROM reaction_roles WHERE role_id = ? AND guild_id = ?`, [row.role_id, reaction.message.guild.id]);
                         }
                     }
@@ -612,7 +590,6 @@ class PulchowkBot {
             const message = await reaction.message.fetch().catch(e => console.error('Error fetching suggestion message:', e));
             if (!message) return;
 
-            // Use this.client.db here
             this.client.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
                 [message.id, message.guild.id],
                 async (err, row) => {
@@ -646,7 +623,6 @@ class PulchowkBot {
                             newDownvotes++;
                         }
 
-                        // Use this.client.db here
                         this.client.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
                             [newUpvotes, newDownvotes, row.id],
                             (updateErr) => {
@@ -678,7 +654,6 @@ class PulchowkBot {
         }
         if (user.bot || !reaction.message.guild) return;
 
-        // Use this.client.db here
         this.client.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
             [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
             async (err, row) => {
@@ -718,7 +693,6 @@ class PulchowkBot {
             const message = await reaction.message.fetch().catch(e => console.error('Error fetching suggestion message:', e));
             if (!message) return;
 
-            // Use this.client.db here
             this.client.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
                 [message.id, message.guild.id],
                 async (err, row) => {
@@ -738,7 +712,6 @@ class PulchowkBot {
                             newDownvotes = Math.max(0, newDownvotes - 1);
                         }
 
-                        // Use this.client.db here
                         this.client.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
                             [newUpvotes, newDownvotes, row.id],
                             (updateErr) => {
@@ -770,12 +743,7 @@ class PulchowkBot {
         const db = this.client.db;
         const guild = interaction.guild;
 
-        // The interaction should already be deferred by _onInteractionCreate if it got here,
-        // so no need to defer again. Just ensure it's deferred or replied.
         if (!interaction.replied && !interaction.deferred) {
-            // This case should ideally not be hit if _onInteractionCreate defers universally.
-            // But as a fallback for specific scenarios or if _onInteractionCreate changes,
-            // we can add a defer here too. For now, assuming it's already handled.
             console.warn(`[Bot] _handleSuggestionDelete called with non-deferred interaction ${interaction.customId}. Deferring now.`);
             await interaction.deferReply({ ephemeral: true }).catch(e => {
                 if (e.code === 10062) {
@@ -783,7 +751,7 @@ class PulchowkBot {
                 } else {
                     console.error("Error deferring reply in _handleSuggestionDelete:", e);
                 }
-                return; // Stop execution if deferring failed
+                return;
             });
         }
         
@@ -837,7 +805,7 @@ class PulchowkBot {
                         .addFields(
                             { name: 'Suggestion ID', value: suggestionId, inline: true },
                             { name: 'Deleted By', value: interaction.user.tag, inline: true },
-                            { name: 'Original Suggester', value: `<@${suggestion.user_id}>`, inline: true }
+                            { name: 'Original Suggester', value: `<@${suggestion.user.id}>`, inline: true }
                         )
                         .setTimestamp();
                     await logChannel.send({ embeds: [logEmbed] });
@@ -859,7 +827,7 @@ class PulchowkBot {
                                 ephemeral: true
                             });
                         } catch (followUpError) {
-                            console.error("Failed to send follow-up error message:", followUpError);
+                                console.error("Failed to send follow-up error message:", followUpError);
                         }
                     } else {
                         console.error("Unexpected error while editing error reply:", editError);
@@ -935,7 +903,6 @@ class PulchowkBot {
                             message.channel.send(`🔇 Anti-spam: ${message.author.tag} is spamming but I cannot mute them. (Warning ${currentWarnings}/${kick_threshold})`).catch(e => console.error("Error sending mute failure message:", e));
                         }
                     }
-                    // Attempt to delete messages related to the spam. userData.count might be slightly off if messages are deleted very quickly.
                     if (message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
                         await message.channel.bulkDelete(Math.min(userData.count, 100), true).catch(e => console.error('Error bulk deleting messages:', e));
                     } else {
@@ -984,6 +951,12 @@ class PulchowkBot {
         }
     }
 
+    /**
+     * @private
+     * Checks for new notices from the configured source, processes attachments (PDF to PNG),
+     * and announces them to the designated Discord channel, splitting messages if too many attachments.
+     * Temporary files are cleaned up after each notice is processed.
+     */
     async _checkAndAnnounceNotices() {
         console.log('[Scheduler] Starting check for new notices...');
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
@@ -1070,176 +1043,202 @@ class PulchowkBot {
             console.log(`[Scheduler] Found ${noticesToAnnounce.length} notices to announce from the past ${MAX_NOTICE_AGE_DAYS} days.`);
 
             for (const notice of noticesToAnnounce) {
-                if (!notice || !notice.title || !notice.link) {
-                    console.warn('[Scheduler] Scraper returned an invalid notice object:', notice);
-                    continue;
-                }
+                let tempFilesOnDisk = [];
+                try {
+                    if (!notice || !notice.title || !notice.link) {
+                        console.warn('[Scheduler] Scraper returned an invalid notice object:', notice);
+                        continue;
+                    }
 
-                const row = await new Promise((resolve, reject) => {
-                    this.client.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
-                        if (err) reject(err);
-                        else resolve(result);
+                    const row = await new Promise((resolve, reject) => {
+                        this.client.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
+                            if (err) reject(err);
+                            else resolve(result);
+                        });
                     });
-                });
 
-                if (row.count === 0) {
-                    console.log(`[Scheduler] New notice found from ${notice.source}: ${notice.title}`);
+                    if (row.count === 0) {
+                        console.log(`[Scheduler] New notice found from ${notice.source}: ${notice.title}`);
 
-                    const noticeEmbed = new EmbedBuilder()
-                        .setColor('#1E90FF')
-                        .setTitle(`Notice ${notice.id ? notice.id + ': ' : ''}${notice.title}`)
-                        .setURL(notice.link)
-                        .setFooter({ text: `Source: ${notice.source}` })
-                        .setTimestamp(new Date(notice.date));
+                        const noticeEmbed = new EmbedBuilder()
+                            .setColor('#1E90FF')
+                            .setTitle(`Notice ${notice.id ? notice.id + ': ' : ''}${notice.title}`)
+                            .setURL(notice.link)
+                            .setFooter({ text: `Source: ${notice.source}` })
+                            .setTimestamp(new Date(notice.date));
 
-                    let filesToSend = [];
-                    let tempFilesOnDisk = [];
-                    let description = `A new notice has been published.`;
+                        let allFilesForNotice = [];
+                        let description = `A new notice has been published.`;
 
-                    if (notice.attachments && notice.attachments.length > 0) {
-                        console.log(`[Scheduler] Processing attachments for notice: ${notice.title}`);
+                        if (notice.attachments && notice.attachments.length > 0) {
+                            console.log(`[Scheduler] Processing attachments for notice: ${notice.title}`);
 
-                        for (const attachmentUrl of notice.attachments) {
-                            try {
-                                const fileName = path.basename(new URL(attachmentUrl).pathname);
-                                const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
-                                tempFilesOnDisk.push(tempFilePath);
+                            for (const attachmentUrl of notice.attachments) {
+                                try {
+                                    const fileName = path.basename(new URL(attachmentUrl).pathname);
+                                    const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
+                                    tempFilesOnDisk.push(tempFilePath);
 
-                                console.log(`[Debug] Attempting to download ${attachmentUrl} to ${tempFilePath}`);
-                                const response = await axios({
-                                    method: 'GET',
-                                    url: attachmentUrl,
-                                    responseType: 'stream'
-                                });
+                                    console.log(`[Debug] Attempting to download ${attachmentUrl} to ${tempFilePath}`);
+                                    const response = await axios({
+                                        method: 'GET',
+                                        url: attachmentUrl,
+                                        responseType: 'stream'
+                                    });
 
-                                const writer = createWriteStream(tempFilePath);
-                                response.data.pipe(writer);
+                                    const writer = createWriteStream(tempFilePath);
+                                    response.data.pipe(writer);
 
-                                await new Promise((resolve, reject) => {
-                                    writer.on('finish', resolve);
-                                    writer.on('error', reject);
-                                });
-                                
-                                const MAX_PDF_PAGES_TO_CONVERT = 10;
-                                if (fileName.toLowerCase().endsWith('.pdf')) {
-                                    try {
-                                        let totalPdfPages = 0;
+                                    await new Promise((resolve, reject) => {
+                                        writer.on('finish', resolve);
+                                        writer.on('error', reject);
+                                    });
+                                    
+                                    const MAX_PDF_PAGES_TO_CONVERT = 10;
+                                    if (fileName.toLowerCase().endsWith('.pdf')) {
                                         try {
-                                            const pdfBuffer = await fsPromises.readFile(tempFilePath);
-                                            const uint8Array = new Uint8Array(pdfBuffer);
-
-                                            const loadingTask = getDocument({ data: uint8Array });
-                                            const pdfDocument = await loadingTask.promise;
-                                            totalPdfPages = pdfDocument.numPages;
-                                            console.log(`[Debug] PDF ${fileName} has ${totalPdfPages} pages using pdfjs-dist.`);
-                                        } catch (pdfjsError) {
-                                            console.warn(`[Warning] Could not get page count for PDF ${fileName} using pdfjs-dist:`, pdfjsError.message);
-                                            totalPdfPages = MAX_PDF_PAGES_TO_CONVERT; // Fallback to max pages if page count detection fails
-                                        }
-
-                                        const pdfConvertOptions = {
-                                            density: 150,
-                                            quality: 90,
-                                            width: 1240,
-                                            height: 1754,
-                                            format: "png",
-                                            saveFilename: path.parse(fileName).name,
-                                            savePath: TEMP_ATTACHMENT_DIR
-                                        };
-
-                                        const convert = fromPath(tempFilePath, pdfConvertOptions);
-                                        let pageConvertedCount = 0;
-
-                                        const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES_TO_CONVERT);
-
-                                        for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
+                                            let totalPdfPages = 0;
                                             try {
-                                                const convertResponse = await convert(pageNum);
+                                                const pdfBuffer = await fsPromises.readFile(tempFilePath);
+                                                const uint8Array = new Uint8Array(pdfBuffer);
 
-                                                if (convertResponse && convertResponse.path) {
-                                                    const pngFilePath = convertResponse.path;
-                                                    const pngFileName = path.basename(pngFilePath);
-                                                    tempFilesOnDisk.push(pngFilePath);
-                                                    filesToSend.push(new AttachmentBuilder(pngFilePath, { name: pngFileName }));
-                                                    console.log(`Converted PDF ${fileName} page ${pageNum} to PNG and prepared for sending.`);
-                                                    pageConvertedCount++;
-                                                } else {
-                                                    console.warn(`No valid response for PDF ${fileName} at page ${pageNum}. Stopping conversion for this PDF.`);
-                                                    break;
-                                                }
-                                            } catch (pageConvertError) {
-                                                console.warn(`Could not convert PDF ${fileName} page ${pageNum}:`, pageConvertError.message);
-                                                if (pageConvertError.message.includes('does not exist') || pageConvertError.message.includes('invalid page number')) {
-                                                    break;
+                                                const loadingTask = getDocument({ data: uint8Array });
+                                                const pdfDocument = await loadingTask.promise;
+                                                totalPdfPages = pdfDocument.numPages;
+                                                console.log(`[Debug] PDF ${fileName} has ${totalPdfPages} pages using pdfjs-dist.`);
+                                            } catch (pdfjsError) {
+                                                console.warn(`[Warning] Could not get page count for PDF ${fileName} using pdfjs-dist:`, pdfjsError.message);
+                                                totalPdfPages = MAX_PDF_PAGES_TO_CONVERT;
+                                            }
+
+                                            const pdfConvertOptions = {
+                                                density: 150,
+                                                quality: 90,
+                                                width: 1240,
+                                                height: 1754,
+                                                format: "png",
+                                                saveFilename: path.parse(fileName).name,
+                                                savePath: TEMP_ATTACHMENT_DIR
+                                            };
+
+                                            const convert = fromPath(tempFilePath, pdfConvertOptions);
+                                            let pageConvertedCount = 0;
+
+                                            const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES_TO_CONVERT);
+
+                                            for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
+                                                try {
+                                                    const convertResponse = await convert(pageNum);
+
+                                                    if (convertResponse && convertResponse.path) {
+                                                        const pngFilePath = convertResponse.path;
+                                                        const pngFileName = path.basename(pngFilePath);
+                                                        tempFilesOnDisk.push(pngFilePath);
+                                                        allFilesForNotice.push(new AttachmentBuilder(pngFilePath, { name: pngFileName }));
+                                                        console.log(`Converted PDF ${fileName} page ${pageNum} to PNG and prepared for sending.`);
+                                                        pageConvertedCount++;
+                                                    } else {
+                                                        console.warn(`No valid response for PDF ${fileName} at page ${pageNum}. Stopping conversion for this PDF.`);
+                                                        break;
+                                                    }
+                                                } catch (pageConvertError) {
+                                                    console.warn(`Could not convert PDF ${fileName} page ${pageNum}:`, pageConvertError.message);
+                                                    if (pageConvertError.message.includes('does not exist') || pageConvertError.message.includes('invalid page number')) {
+                                                        break;
+                                                    }
                                                 }
                                             }
-                                        }
 
-                                        if (pageConvertedCount === 0) {
-                                            console.warn(`No pages converted for PDF ${fileName}. Sending original PDF.`);
-                                            filesToSend.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
-                                        } else if (pageConvertedCount < totalPdfPages) {
-                                            console.log(`\n(Sent ${pageConvertedCount} of ${totalPdfPages} pages from ${fileName} as images.)`);
-                                        } else {
-                                            console.log(`\n(Sent all ${totalPdfPages} pages from ${fileName} as images.)`);
-                                        }
+                                            if (pageConvertedCount === 0) {
+                                                console.warn(`No pages converted for PDF ${fileName}. Sending original PDF.`);
+                                                allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                            } else if (pageConvertedCount < totalPdfPages) {
+                                                console.log(`\n(Sent ${pageConvertedCount} of ${totalPdfPages} pages from ${fileName} as images.)`);
+                                            } else {
+                                                console.log(`\n(Sent all ${totalPdfPages} pages from ${fileName} as images.)`);
+                                            }
 
-                                    } catch (pdfProcessError) {
-                                        console.error(`Error processing PDF ${fileName}:`, pdfProcessError.message);
-                                        description += `\n\n⚠️ Could not process PDF attachment: ${fileName}`;
-                                        filesToSend.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                        } catch (pdfProcessError) {
+                                            console.error(`Error processing PDF ${fileName}:`, pdfProcessError.message);
+                                            description += `\n\n⚠️ Could not process PDF attachment: ${fileName}`;
+                                            allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                        }
+                                    } else {
+                                        allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                        console.log(`Prepared attachment: ${fileName}`);
                                     }
-                                } else {
-                                    filesToSend.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
-                                    console.log(`Prepared attachment: ${fileName}`);
+                                } catch (downloadError) {
+                                    console.error(`Error downloading attachment ${attachmentUrl}:`, downloadError.message);
+                                    description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
                                 }
-                            } catch (downloadError) {
-                                console.error(`Error downloading attachment ${attachmentUrl}:`, downloadError.message);
-                                description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
                             }
                         }
-                    }
-                    noticeEmbed.setDescription(description);
-                    
-                    try {
-                        await noticeChannel.send({ embeds: [noticeEmbed], files: filesToSend });
-                        console.log(`Sent notice and attachments for "${notice.title}" to Discord.`);
-                    } catch (discordSendError) {
-                        console.error(`Error sending notice or files to channel ${TARGET_NOTICE_CHANNEL_ID}:`, discordSendError);
-                        if (adminChannel) await adminChannel.send(`❌ Error sending notice/files for "${notice.title}": ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
-                    } finally {
-                        for (const filePath of tempFilesOnDisk) {
+                        noticeEmbed.setDescription(description);
+                        
+                        const ATTACHMENT_LIMIT = 10;
+                        if (allFilesForNotice.length > 0) {
+                            let sentFirstMessage = false;
+                            for (let i = 0; i < allFilesForNotice.length; i += ATTACHMENT_LIMIT) {
+                                const chunk = allFilesForNotice.slice(i, i + ATTACHMENT_LIMIT);
+                                try {
+                                    if (!sentFirstMessage) {
+                                        await noticeChannel.send({ embeds: [noticeEmbed], files: chunk });
+                                        sentFirstMessage = true;
+                                    } else {
+                                        await noticeChannel.send({ content: `(Continued attachments for "${notice.title}")`, files: chunk });
+                                    }
+                                    console.log(`Sent chunk of ${chunk.length} attachments for "${notice.title}" to Discord.`);
+                                } catch (discordSendError) {
+                                    console.error(`Error sending notice or files to channel ${TARGET_NOTICE_CHANNEL_ID} (chunk ${i / ATTACHMENT_LIMIT + 1}):`, discordSendError);
+                                    if (adminChannel) await adminChannel.send(`❌ Error sending notice/files for "${notice.title}" (chunk ${i / ATTACHMENT_LIMIT + 1}): ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
+                                }
+                            }
+                        } else {
                             try {
-                                await fsPromises.unlink(filePath);
-                                console.log(`Cleaned up temporary file: ${filePath}`);
-                            } catch (unlinkError) {
-                                console.warn(`Error cleaning up temporary file ${filePath}:`, unlinkError.message);
+                                await noticeChannel.send({ embeds: [noticeEmbed] });
+                                console.log(`Sent notice for "${notice.title}" to Discord (no attachments).`);
+                            } catch (discordSendError) {
+                                console.error(`Error sending notice to channel ${TARGET_NOTICE_CHANNEL_ID}:`, discordSendError);
+                                if (adminChannel) await adminChannel.send(`❌ Error sending notice for "${notice.title}": ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
                             }
                         }
-                    }
-                    
-                    await new Promise((resolve, reject) => {
-                        this.client.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
-                            [notice.title, notice.link, notice.date, Date.now()],
-                            (insertErr) => {
-                                if (insertErr) {
-                                    reject(insertErr);
-                                } else {
-                                    console.log(`[Scheduler] Announced and saved new notice: ${notice.title}`);
-                                    resolve();
+                        
+                        await new Promise((resolve, reject) => {
+                            this.client.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
+                                [notice.title, notice.link, notice.date, Date.now()],
+                                (insertErr) => {
+                                    if (insertErr) {
+                                        reject(insertErr);
+                                    } else {
+                                        console.log(`[Scheduler] Announced and saved new notice: ${notice.title}`);
+                                        resolve();
+                                    }
                                 }
-                            }
-                        );
-                    }).catch(insertErr => {
-                        console.error('Error saving new notice to DB:', insertErr.message);
-                        if (adminChannel) adminChannel.send(`❌ Error saving new notice to DB: ${insertErr.message}`).catch(e => console.error("Error sending admin error:", e));
-                    });
+                            );
+                        }).catch(insertErr => {
+                            console.error('Error saving new notice to DB:', insertErr.message);
+                            if (adminChannel) adminChannel.send(`❌ Error saving new notice to DB: ${insertErr.message}`).catch(e => console.error("Error sending admin error:", e));
+                        });
 
-                } else {
-                    console.log(`[Scheduler] Notice from ${notice.source} ("${notice.title}") already announced. Skipping.`);
+                    } else {
+                        console.log(`[Scheduler] Notice from ${notice.source} ("${notice.title}") already announced. Skipping.`);
+                    }
+                } catch (noticeProcessError) {
+                    console.error(`[Scheduler] Error processing notice "${notice.title}":`, noticeProcessError.message);
+                    if (adminChannel) {
+                        await adminChannel.send(`❌ Error processing notice "${notice.title}": ${noticeProcessError.message}`).catch(e => console.error("Error sending admin error:", e));
+                    }
+                } finally {
+                    for (const filePath of tempFilesOnDisk) {
+                        try {
+                            await fsPromises.unlink(filePath);
+                            console.log(`Cleaned up temporary file: ${filePath}`);
+                        } catch (unlinkError) {
+                            console.warn(`Error cleaning up temporary file ${filePath}:`, unlinkError.message);
+                        }
+                    }
                 }
             }
-
         } catch (error) {
             console.error('[Scheduler] Error during notice scraping or announcement:', error.message);
             if (adminChannel) {
@@ -1263,7 +1262,6 @@ class PulchowkBot {
         let announcementChannel;
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
-            // Corrected condition: it should be GuildText or GuildAnnouncement
             if (!announcementChannel || !(announcementChannel.type === ChannelType.GuildText || announcementChannel.type === ChannelType.GuildAnnouncement)) {
                 console.error(`[Scheduler] Configured birthday channel not found or is not a text/announcement channel.`);
                 return;
@@ -1280,7 +1278,6 @@ class PulchowkBot {
 
         for (const [guildId, guild] of guilds) {
             try {
-                // Use this.client.db here
                 const rows = await new Promise((resolve, reject) => {
                     this.client.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
                         [guild.id, currentMonth, currentDay],
@@ -1310,7 +1307,7 @@ class PulchowkBot {
                                 firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 });
                             }
                         } catch (fetchErr) {
-                            console.warn(`Could not fetch birthday user ${row.user_id}):`, fetchErr.message);
+                            console.warn(`Could not fetch birthday user ${row.user.id}):`, fetchErr.message);
                             birthdayUsers.push(`• Unknown User (ID: ${row.user.id})`);
                         }
                     }
