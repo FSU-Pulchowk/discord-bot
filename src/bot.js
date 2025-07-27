@@ -186,7 +186,9 @@ class PulchowkBot {
             if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
                 return;
             }
-
+             if (customId.startsWith('gotverified_')) {
+                return;
+            }
             if (customId.startsWith('verify_start_button_')) {
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
