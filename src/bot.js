@@ -186,7 +186,7 @@ class PulchowkBot {
             if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
                 return;
             }
-             if (customId.startsWith('gotverified_')) {
+            if (customId.startsWith('gotverified_')) {
                 return;
             }
             if (customId.startsWith('verify_start_button_')) {
