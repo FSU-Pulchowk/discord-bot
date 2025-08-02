@@ -37,6 +37,18 @@ export async function validateRssUrl(url) {
 }
 
 /**
+ * Helper function to decode HTML entities in a string.
+ * @param {string} text The text containing HTML entities.
+ * @returns {string} The text with HTML entities decoded.
+ */
+function decodeHtmlEntities(text) {
+    if (!text) return '';
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+}
+
+/**
  * Helper function to extract the first image URL from an HTML string.
  * @param {string} htmlString The HTML content to parse.
  * @returns {string | null} The URL of the first image found, or null if none.
@@ -56,24 +68,32 @@ function extractImageUrlFromHtml(htmlString) {
  * @returns {Promise<void>}
  */
 async function sendLatestFeedEntry(feed, latestItem, channel, guildName) {
+    let title = decodeHtmlEntities(latestItem.title || 'New Post');
+    let description = decodeHtmlEntities(latestItem.contentSnippet ? latestItem.contentSnippet.substring(0, 400) : 'No description available.');
+    let feedTitle = decodeHtmlEntities(feed.title);
+
     const embed = new EmbedBuilder()
         .setColor('#0099ff')
-        .setTitle(latestItem.title || 'New Post')
+        .setTitle(title)
         .setURL(latestItem.link)
-        .setDescription(latestItem.contentSnippet ? latestItem.contentSnippet.substring(0, 400) : 'No description available.')
-        .setFooter({ text: `From ${feed.title}` })
+        .setDescription(description)
+        .setFooter({ text: `From ${feedTitle}` })
         .setTimestamp(latestItem.isoDate ? new Date(latestItem.isoDate) : new Date());
 
     let imageUrl = null;
 
-    if (latestItem.enclosure && latestItem.enclosure.url && latestItem.enclosure.type && latestItem.enclosure.type.startsWith('image')) {
-        imageUrl = latestItem.enclosure.url;
-    } else if (latestItem.media && latestItem.media.content && latestItem.media.content.length > 0 && latestItem.media.content[0].url && latestItem.media.content[0].type && latestItem.media.content[0].type.startsWith('image')) {
+    // Prioritize media:content and media:thumbnail
+    if (latestItem.media && latestItem.media.content && latestItem.media.content.length > 0 && latestItem.media.content[0].url && latestItem.media.content[0].type && latestItem.media.content[0].type.startsWith('image')) {
         imageUrl = latestItem.media.content[0].url;
+    } else if (latestItem.media && latestItem.media.thumbnail && latestItem.media.thumbnail.url) {
+        imageUrl = latestItem.media.thumbnail.url;
+    } else if (latestItem.enclosure && latestItem.enclosure.url && latestItem.enclosure.type && latestItem.enclosure.type.startsWith('image')) {
+        imageUrl = latestItem.enclosure.url;
     } else if (latestItem.image && latestItem.image.url) {
         imageUrl = latestItem.image.url;
     }
     
+    // Fallback to extracting from HTML content/description
     if (!imageUrl) {
         if (latestItem.content) {
             imageUrl = extractImageUrlFromHtml(latestItem.content);
@@ -87,7 +107,7 @@ async function sendLatestFeedEntry(feed, latestItem, channel, guildName) {
     }
 
     await channel.send({ embeds: [embed] });
-    console.log(`[RSS Poller] Posted new entry from "${feed.title}" to #${channel.name} in "${guildName}".`);
+    console.log(`[RSS Poller] Posted new entry from "${feedTitle}" to #${channel.name} in "${guildName}".`);
 }
 
 /**
