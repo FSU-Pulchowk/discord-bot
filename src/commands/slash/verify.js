@@ -290,34 +290,36 @@ export async function execute(interaction) {
 export async function handleButtonInteraction(interaction) {
     let guildToVerifyFor = null;
     let memberInGuild = null;
-
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
     const GUILD_ID = process.env.GUILD_ID;
 
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
-        return interaction.reply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
+        return; 
     }
 
     if (!GUILD_ID || GUILD_ID === 'YOUR_GUILD_ID_HERE') {
-        return interaction.reply({ content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
+        return;
     }
-
     try {
         guildToVerifyFor = await interaction.client.guilds.fetch(GUILD_ID);
         memberInGuild = await guildToVerifyFor.members.fetch(interaction.user.id);
 
         if (!memberInGuild) {
-            return interaction.reply({ content: `❌ You must be a member of the main server (${guildToVerifyFor.name}) to use this button. Please join the server first.`, flags: [MessageFlags.Ephemeral] });
+            await interaction.reply({ content: `❌ You must be a member of the main server (${guildToVerifyFor.name}) to use this button. Please join the server first.`, flags: [MessageFlags.Ephemeral] });
+            return; 
         }
     } catch (error) {
         console.error(`Error fetching guild or member for DM button verification:`, error);
-        return interaction.reply({ content: '❌ Could not determine your membership in the main server. Please ensure you are in the server and try again later.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ content: '❌ Could not determine your membership in the main server. Please ensure you are in the server and try again later.', flags: [MessageFlags.Ephemeral] });
+        return; 
     }
 
     if (memberInGuild.roles.cache.has(VERIFIED_ROLE_ID)) {
-        return interaction.reply({ content: '✅ You are already verified!', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ content: '✅ You are already verified!', flags: [MessageFlags.Ephemeral] });
+        return; 
     }
-
     const modal = createVerifyModal();
     await interaction.showModal(modal);
 }

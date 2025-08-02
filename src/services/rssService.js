@@ -1,10 +1,18 @@
 import Parser from 'rss-parser';
-import { EmbedBuilder, ChannelType } from 'discord.js';
+import { EmbedBuilder, ChannelType, DiscordAPIError } from 'discord.js';
 import { getAllFeeds, updateLastGuid, addFeed } from './rssDbManager.js'; 
 import { XMLParser } from 'fast-xml-parser';
 import { fetchWithRetry } from './scraper.js';
+import he from 'he';
 
-const parser = new Parser();
+const parser = new Parser({
+    customFields: {
+        item: [
+            ['media:content', 'mediaContent'],
+            ['media:thumbnail', 'mediaThumbnail'] 
+        ]
+    }
+});
 const xmlParser = new XMLParser();
 
 /**
@@ -23,7 +31,7 @@ export async function validateRssUrl(url) {
                 title: parsedXml.rss.channel.title || 'Untitled Feed'
             };
         }
-        if (parsedXml.feed && parsedXml.feed.feed.entry) { // Note: This might need adjustment based on actual Atom feed structure if 'feed.feed.entry' is incorrect. It's usually 'feed.entry'.
+        if (parsedXml.feed && parsedXml.feed.feed.entry) { 
             return {
                 isValid: true,
                 title: parsedXml.feed.title || 'Untitled Feed'
@@ -37,18 +45,6 @@ export async function validateRssUrl(url) {
 }
 
 /**
- * Helper function to decode HTML entities in a string.
- * @param {string} text The text containing HTML entities.
- * @returns {string} The text with HTML entities decoded.
- */
-function decodeHtmlEntities(text) {
-    if (!text) return '';
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = text;
-    return textarea.value;
-}
-
-/**
  * Helper function to extract the first image URL from an HTML string.
  * @param {string} htmlString The HTML content to parse.
  * @returns {string | null} The URL of the first image found, or null if none.
@@ -57,6 +53,16 @@ function extractImageUrlFromHtml(htmlString) {
     if (!htmlString) return null;
     const imgMatch = htmlString.match(/<img[^>]+src="([^">]+)"/);
     return imgMatch ? imgMatch[1] : null;
+}
+
+/**
+ * Helper function to decode common HTML entities in a string for Node.js environment.
+ * @param {string} text The text containing HTML entities.
+ * @returns {string} The text with common HTML entities decoded.
+ */
+function decodeHtmlEntities(text) {
+    if (!text) return '';
+    return he.decode(text);
 }
 
 /**
@@ -81,33 +87,52 @@ async function sendLatestFeedEntry(feed, latestItem, channel, guildName) {
         .setTimestamp(latestItem.isoDate ? new Date(latestItem.isoDate) : new Date());
 
     let imageUrl = null;
-
-    // Prioritize media:content and media:thumbnail
-    if (latestItem.media && latestItem.media.content && latestItem.media.content.length > 0 && latestItem.media.content[0].url && latestItem.media.content[0].type && latestItem.media.content[0].type.startsWith('image')) {
-        imageUrl = latestItem.media.content[0].url;
-    } else if (latestItem.media && latestItem.media.thumbnail && latestItem.media.thumbnail.url) {
-        imageUrl = latestItem.media.thumbnail.url;
-    } else if (latestItem.enclosure && latestItem.enclosure.url && latestItem.enclosure.type && latestItem.enclosure.type.startsWith('image')) {
+    if (latestItem.mediaContent && latestItem.mediaContent.$ && latestItem.mediaContent.$.url) {
+        imageUrl = latestItem.mediaContent.$.url;
+    } else if (latestItem.mediaThumbnail && latestItem.mediaThumbnail.$ && latestItem.mediaThumbnail.$.url) {
+        imageUrl = latestItem.mediaThumbnail.$.url;
+    }
+    else if (latestItem.media) {
+        if (Array.isArray(latestItem.media.content) && latestItem.media.content.length > 0 && latestItem.media.content[0].url) {
+            imageUrl = latestItem.media.content[0].url;
+        } else if (typeof latestItem.media.content === 'object' && latestItem.media.content.url) {
+            imageUrl = latestItem.media.content.url;
+        } else if (Array.isArray(latestItem.media.thumbnail) && latestItem.media.thumbnail.length > 0 && latestItem.media.thumbnail[0].url) {
+            imageUrl = latestItem.media.thumbnail[0].url;
+        } else if (typeof latestItem.media.thumbnail === 'object' && latestItem.media.thumbnail.url) {
+            imageUrl = latestItem.media.thumbnail.url;
+        } else if (latestItem.media.url && latestItem.media.type && latestItem.media.type.startsWith('image')) {
+            imageUrl = latestItem.media.url;
+        }
+    }
+    else if (latestItem.enclosure && latestItem.enclosure.url && latestItem.enclosure.type && latestItem.enclosure.type.startsWith('image')) {
         imageUrl = latestItem.enclosure.url;
-    } else if (latestItem.image && latestItem.image.url) {
+    }
+    else if (latestItem.image && latestItem.image.url) {
         imageUrl = latestItem.image.url;
     }
-    
-    // Fallback to extracting from HTML content/description
-    if (!imageUrl) {
-        if (latestItem.content) {
-            imageUrl = extractImageUrlFromHtml(latestItem.content);
-        } else if (latestItem.description) {
-            imageUrl = extractImageUrlFromHtml(latestItem.description);
-        }
+    else if (latestItem.itunes && latestItem.itunes.image && latestItem.itunes.image.url) {
+        imageUrl = latestItem.itunes.image.url;
+    }
+    else if (latestItem.content) {
+        imageUrl = extractImageUrlFromHtml(latestItem.content);
+    } else if (latestItem.description) {
+        imageUrl = extractImageUrlFromHtml(latestItem.description);
     }
 
     if (imageUrl) {
         embed.setImage(imageUrl);
     }
-
-    await channel.send({ embeds: [embed] });
-    console.log(`[RSS Poller] Posted new entry from "${feedTitle}" to #${channel.name} in "${guildName}".`);
+    try {
+        await channel.send({ embeds: [embed] });
+        console.log(`[RSS Poller] Posted new entry from "${feedTitle}" to #${channel.name} in "${guildName}".`);
+    } catch (error) {
+        if (error instanceof DiscordAPIError && error.code === 50013) { 
+            console.error(`[RSS Poller] Missing permissions to send messages in channel #${channel.name} (${channel.id}) in guild "${guildName}" (${channel.guild.id}). Please check bot permissions and channel overwrites.`);
+        } else {
+            console.error(`[RSS Poller] Failed to send message to channel #${channel.name} in "${guildName}":`, error.message);
+        }
+    }
 }
 
 /**
@@ -189,7 +214,7 @@ export async function addAndPostFirstArticle(client, guildId, channelId, rssUrl)
         const latestItem = feed.items[0];
         const newGuid = latestItem.guid || latestItem.link || latestItem.title;
 
-        await sendLatestFeedEntry(feed, latestItem, channel, guild.name);
+        const sendSuccess = await sendLatestFeedEntry(feed, latestItem, channel, guild.name);
 
         await addFeed(guildId, rssUrl, channelId, newGuid, validation.title); 
         console.log(`[RSS Add] Successfully added feed "${validation.title}" and posted first article to #${channel.name} in "${guild.name}".`);
