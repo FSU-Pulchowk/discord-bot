@@ -22,7 +22,7 @@ const USER_AGENTS = [
  * @param {number} [timeout=60000] - The timeout for each request in milliseconds.
  * @returns {Promise<string>} - The HTML data from the URL.
  */
-async function fetchWithRetry(url, retries = 3, timeout = 60000) {
+export async function fetchWithRetry(url, retries = 3, timeout = 60000) {
     const proxyUrl = process.env.PROXY_URL;
     const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 

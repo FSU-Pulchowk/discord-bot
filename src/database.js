@@ -385,7 +385,48 @@ async function initializeDatabase() {
                         console.log('Admin tasks table checked/created.');
                     }
                 });
-
+                /**
+                 * rss_feeds Table: Stores RSS feed subscriptions for each guild.
+                 * - id: Auto-incrementing primary key.
+                 * - guild_id: The ID of the guild the subscription belongs to.
+                 * - channel_id: The ID of the channel where updates will be posted.
+                 * - url: The URL of the RSS feed.
+                 * - last_guid: The GUID of the last item posted to prevent duplicates.
+                 * - title: The title of the RSS feed (NEWLY ADDED).
+                 */
+                db.run(`
+                    CREATE TABLE IF NOT EXISTS rss_feeds (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        channel_id TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        last_guid TEXT,
+                        title TEXT, -- ADDED THIS LINE
+                        UNIQUE(guild_id, channel_id, url)
+                    )
+                `, (err) => {
+                    if (err) {
+                        console.error('Error creating rss_feeds table:', err.message);
+                    } else {
+                        console.log('Rss_feeds table checked/created.');
+                    }
+                });
+                db.all("PRAGMA table_info(rss_feeds)", (err, columns) => {
+                    if (err) {
+                        console.error("Error checking rss_feeds schema:", err.message);
+                        return;
+                    }
+                    const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
+                    if (!columnNames.includes("title")) {
+                        db.run("ALTER TABLE rss_feeds ADD COLUMN title TEXT", (alterErr) => {
+                            if (alterErr) {
+                                console.error("Error adding title column to rss_feeds:", alterErr.message);
+                            } else {
+                                console.log("Added title column to rss_feeds.");
+                            }
+                        });
+                    }
+                });
                 // Migrations for 'admin_tasks' table: Ensure correct column names and types
                 db.all("PRAGMA table_info(admin_tasks)", (err, columns) => {
                     if (err) {
