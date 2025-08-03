@@ -99,19 +99,17 @@ export async function execute(interaction) {
 
             collector.on('collect', async i => {
                 const parts = i.customId.split('_');
-                const action = parts[1]; 
-                const oldPage = parseInt(parts[2]);
-
+                const action = parts[1];
+                const oldPageFromCustomId = parseInt(parts[2]);
                 if (action === 'next') {
-                    currentPage = Math.min(oldPage + 1, totalPages - 1);
+                    currentPage = Math.min(oldPageFromCustomId + 1, totalPages - 1);
                 } else if (action === 'prev') {
-                    currentPage = Math.max(oldPage - 1, 0);
+                    currentPage = Math.max(oldPageFromCustomId - 1, 0);
                 }
-
                 await i.update({
-                    embeds: [await generateEmbed(currentPage)], // Await the embed generation
+                    embeds: [await generateEmbed(currentPage)],
                     components: [generateButtons(currentPage)]
-                });
+                }).catch(updateErr => console.error('Error updating interaction reply:', updateErr));
             });
 
             collector.on('end', async collected => {

@@ -3,8 +3,8 @@ import {
     EmbedBuilder,
     PermissionsBitField,
     MessageFlags,
-    ChannelType, 
-    ActionRowBuilder, 
+    ChannelType,
+    ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle
 } from 'discord.js';
@@ -15,7 +15,7 @@ dotenv.config();
 export const data = new SlashCommandBuilder()
     .setName('remindverify')
     .setDescription('Sends a verification reminder to unverified users in their DMs.')
-    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild) 
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild)
     .addStringOption(option =>
         option.setName('message')
             .setDescription('Optional custom message to include in the reminder.')
@@ -24,6 +24,14 @@ export const data = new SlashCommandBuilder()
         option.setName('target_user')
             .setDescription('Optional: Send reminder only to a specific user (for testing).')
             .setRequired(false));
+
+/**
+ * Minimum delay between sending DMs to prevent rate limiting and spam detection.
+ * Discord's DM rate limits are strict. Start with a conservative value.
+ * Adjust this if you still face issues, but be cautious with lower values.
+ * @type {number}
+ */
+const DM_SEND_DELAY_MS = 3000; 
 
 /**
  * Executes the /remindverify slash command.
@@ -38,7 +46,7 @@ export async function execute(interaction) {
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
-    const GUILD_ID = process.env.GUILD_ID; 
+    const GUILD_ID = process.env.GUILD_ID;
 
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
         return interaction.editReply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.' });
@@ -67,8 +75,8 @@ export async function execute(interaction) {
     }
 
     let unverifiedMembers = members.filter(member =>
-        !member.user.bot && 
-        !member.roles.cache.has(VERIFIED_ROLE_ID) 
+        !member.user.bot &&
+        !member.roles.cache.has(VERIFIED_ROLE_ID)
     );
 
     if (targetUser) {
@@ -104,21 +112,23 @@ export async function execute(interaction) {
         reminderEmbed.addFields({ name: 'Important Note:', value: customMessage });
     }
 
+    const verifyButton = new ButtonBuilder()
+        .setCustomId(`verify_start_button`)
+        .setLabel('Verify Your Account')
+        .setStyle(ButtonStyle.Primary);
+    const actionRow = new ActionRowBuilder().addComponents(verifyButton);
+
     for (const member of unverifiedMembers.values()) {
-        const verifyButton = new ButtonBuilder()
-            .setCustomId(`verify_start_button_${member.user.id}`) // CORRECTED: Use member.user.id for the recipient
-            .setLabel('Verify Your Account')
-            .setStyle(ButtonStyle.Primary);
-        const actionRow = new ActionRowBuilder().addComponents(verifyButton);
         try {
-            await member.send({ embeds: [reminderEmbed], components: [actionRow] }); // Include the button in the DM
+            await member.send({ embeds: [reminderEmbed], components: [actionRow] });
             sentCount++;
-            await new Promise(resolve => setTimeout(resolve, 500)); // Small delay to prevent rate limits
+            console.log(`[DM Sent] Sent verification reminder to ${member.user.tag} (${member.user.id}).`);
         } catch (error) {
-            console.warn(`Failed to send verification reminder DM to ${member.user.tag} (${member.user.id}):`, error.message);
+            console.warn(`[DM Failed] Failed to send verification reminder DM to ${member.user.tag} (${member.user.id}):`, error.message);
             failedCount++;
             failedUsers.push(member.user.tag);
         }
+        await new Promise(resolve => setTimeout(resolve, DM_SEND_DELAY_MS));
     }
 
     let replyContent = `✅ Sent **${sentCount}** verification reminders.`;
@@ -128,7 +138,7 @@ export async function execute(interaction) {
 
     await interaction.editReply({ content: replyContent });
 
-    const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID; // Add this to your .env
+    const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
     if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
         try {
             const adminLogChannel = await interaction.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
