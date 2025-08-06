@@ -304,32 +304,6 @@ class PulchowkBot {
                 return;
             }
 
-            // Handle 'gotverified_' button. The associated command should ideally handle its own response.
-            if (customId.startsWith('gotverified_')) {
-                const gotVerifiedCommand = this.client.commands.get('gotverified');
-                if (gotVerifiedCommand && typeof gotVerifiedCommand.execute === 'function') {
-                    try {
-                        // Assuming 'gotverified' command's execute handles its own defer/reply/followUp
-                        await gotVerifiedCommand.execute(interaction);
-                    } catch (error) {
-                        console.error(`Error handling 'gotverified' button interaction:`, error);
-                        if (!interaction.replied && !interaction.deferred) {
-                            await interaction.reply({ content: '❌ An error occurred with the verification status button.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to gotverified button error:", e));
-                        } else {
-                            await interaction.followUp({ content: '❌ An error occurred with the verification status button.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error following up to gotverified button error:", e));
-                        }
-                    }
-                } else {
-                    console.warn(`'gotverified' command not found or execute function missing for button interaction.`);
-                    if (!interaction.replied && !interaction.deferred) {
-                        await interaction.reply({ content: '❌ The "Got Verified" command is not configured correctly.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured gotverified command:", e));
-                    } else {
-                        await interaction.followUp({ content: '❌ The "Got Verified" command is not configured correctly.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error following up to misconfigured gotverified command:", e));
-                    }
-                }
-                return; // Exit after handling this specific button
-            }
-
             // --- General Deferral for other buttons if not already replied/deferred ---
             // This acts as a catch-all for buttons that might take longer to process,
             // ensuring the "Bot is thinking..." message appears.
