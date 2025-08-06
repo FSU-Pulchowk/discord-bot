@@ -304,6 +304,34 @@ class PulchowkBot {
                 return;
             }
 
+            // Handle 'gotverified_' button. The associated command should ideally handle its own response.
+             if (customId.startsWith('gotverified_')) {
+                await interaction.deferUpdate();
+
+                const parts = customId.split('_');
+                const action = parts[1]; // 'prev' or 'next'
+                let currentPage = parseInt(parts[2], 10);
+
+                if (action === 'next') {
+                    currentPage++;
+                } else if (action === 'prev') {
+                    currentPage--;
+                }
+
+                interaction.client.db.all(`SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
+                    [interaction.guild.id],
+                    async (err, allRows) => {
+                        if (err || !allRows) {
+                            return interaction.editReply({ content: '❌ Could not retrieve user list to change pages.', components: [] });
+                        }
+                        
+                        const messagePayload = await generateVerifiedEmbed(interaction, currentPage, allRows);
+                        await interaction.editReply(messagePayload);
+                    }
+                );
+                return; 
+            }
+
             // --- General Deferral for other buttons if not already replied/deferred ---
             // This acts as a catch-all for buttons that might take longer to process,
             // ensuring the "Bot is thinking..." message appears.
