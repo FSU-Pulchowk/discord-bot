@@ -113,7 +113,7 @@ export async function execute(interaction) {
     }
 
     const verifyButton = new ButtonBuilder()
-        .setCustomId(`verify_start_button`)
+        .setCustomId(`verify_start_button_${interaction.user.id}`)
         .setLabel('Verify Your Account')
         .setStyle(ButtonStyle.Primary);
     const actionRow = new ActionRowBuilder().addComponents(verifyButton);

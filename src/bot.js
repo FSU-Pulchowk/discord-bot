@@ -238,21 +238,6 @@ class PulchowkBot {
         } else {
             console.warn('NOTICE_CHECK_INTERVAL_MS is not set or invalid. Notice scraping disabled.');
         }
-
-        // Removed the commented-out email reminder schedule as per your confirmation.
-        // If you decide to add email reminders in the future, you'll need to implement
-        // emailService.sendDueReminders in your emailService.js file.
-
-        // You can add other scheduled jobs here (e.g., voice activity updates)
-        // schedule.scheduleJob('*/5 * * * *', async () => { // Every 5 minutes
-        //     console.log('Running scheduled job: Update voice activity.');
-        //     try {
-        //         await this._updateVoiceActivity();
-        //     } catch (error) {
-        //         console.error('Error during scheduled voice activity update:', error);
-        //     }
-        // });
-
         console.log('All scheduled jobs set up.');
     }
 
@@ -295,41 +280,56 @@ class PulchowkBot {
         // --- Handle Button Interactions ---
         else if (interaction.isButton()) {
             const customId = interaction.customId;
-
             // --- Specific Button Handlers (that might or might not defer/reply themselves) ---
-
             // Handle 'confirm_suggestion' or 'cancel_suggestion'
             // Assuming these are handled elsewhere (e.g., a collector or a specific command's method)
             if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
                 return;
             }
-
-            // Handle 'gotverified_' button. The associated command should ideally handle its own response.
-             if (customId.startsWith('gotverified_')) {
-                await interaction.deferUpdate();
-
-                const parts = customId.split('_');
-                const action = parts[1]; // 'prev' or 'next'
-                let currentPage = parseInt(parts[2], 10);
-
-                if (action === 'next') {
-                    currentPage++;
-                } else if (action === 'prev') {
-                    currentPage--;
+            else if (customId.startsWith('gotverified_')) {
+                if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+                    return interaction.reply({
+                        content: '❌ You do not have permission to view this list.',
+                        ephemeral: true
+                    });
                 }
-
-                interaction.client.db.all(`SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
+                await interaction.deferUpdate();
+                const parts = customId.split('_');
+                const action = parts[1];
+                let currentPage = parseInt(parts[2], 10);
+                const originalUserId = parts[3];
+                if (interaction.user.id !== originalUserId) {
+                    return interaction.followUp({
+                        content: '❌ You cannot control someone else’s verification list.',
+                        ephemeral: true
+                    }).catch(() => {});
+                }
+                interaction.client.db.all(
+                    `SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
                     [interaction.guild.id],
                     async (err, allRows) => {
                         if (err || !allRows) {
-                            return interaction.editReply({ content: '❌ Could not retrieve user list to change pages.', components: [] });
+                            return interaction.editReply({
+                                content: '❌ Could not retrieve user list to change pages.',
+                                components: []
+                            });
                         }
-                        
-                        const messagePayload = await generateVerifiedEmbed(interaction, currentPage, allRows);
-                        await interaction.editReply(messagePayload);
+                        if (action === 'next') currentPage++;
+                        if (action === 'prev') currentPage--;
+                        try {
+                            const { renderGotVerifiedPage } = await import('./commands/slash/gotVerified.js');
+                            const pageData = await renderGotVerifiedPage(interaction, allRows, currentPage, originalUserId);
+                            await interaction.editReply(pageData);
+                        } catch (importError) {
+                            console.error('Error rendering verified users page:', importError);
+                            return interaction.editReply({
+                                content: '❌ Error updating the verified users list.',
+                                components: []
+                            });
+                        }
                     }
                 );
-                return; 
+                return;
             }
 
             // --- General Deferral for other buttons if not already replied/deferred ---
@@ -1179,8 +1179,8 @@ class PulchowkBot {
                                             const pdfConvertOptions = {
                                                 density: 150,
                                                 quality: 90,
-                                                width: 1240,
-                                                height: 1754,
+                                                height: 1240,
+                                                width: 1754,
                                                 format: "png",
                                                 saveFilename: path.parse(fileName).name,
                                                 savePath: TEMP_ATTACHMENT_DIR
