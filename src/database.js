@@ -386,6 +386,24 @@ async function initializeDatabase() {
                     }
                 });
                 /**
+                 * guild_structure_backups Table: Stores a JSON backup of the guild's structure.
+                 * - guild_id: Unique identifier for the Discord server (Primary Key).
+                 * - backup_data: The JSON string containing role and channel data.
+                 * - saved_at: Unix timestamp of when the backup was saved.
+                 */
+                db.run(`CREATE TABLE IF NOT EXISTS guild_structure_backups (
+                    guild_id TEXT PRIMARY KEY,
+                    backup_data TEXT NOT NULL,
+                    saved_at INTEGER NOT NULL,
+                    UNIQUE(guild_id) ON CONFLICT REPLACE
+                )`, (err) => {
+                    if (err) {
+                        console.error('Error creating guild_structure_backups table:', err.message);
+                    } else {
+                        console.log('Guild structure backups table checked/created.');
+                    }
+                });
+                /**
                  * rss_feeds Table: Stores RSS feed subscriptions for each guild.
                  * - id: Auto-incrementing primary key.
                  * - guild_id: The ID of the guild the subscription belongs to.
