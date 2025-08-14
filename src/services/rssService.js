@@ -1,15 +1,19 @@
 import Parser from 'rss-parser';
-import { EmbedBuilder, ChannelType, DiscordAPIError } from 'discord.js';
-import { getAllFeeds, updateLastGuid, addFeed } from './rssDbManager.js'; 
+import { EmbedBuilder, ChannelType } from 'discord.js';
+import { getAllFeeds, updateLastGuid, addFeed } from './rssDbManager.js';
 import { XMLParser } from 'fast-xml-parser';
 import { fetchWithRetry } from './scraper.js';
 import he from 'he';
+import { log } from '../utils/debug.js';
+import { attachImagesToItems } from '../utils/imageExtactorRSS.js';
 
 const parser = new Parser({
     customFields: {
         item: [
             ['media:content', 'mediaContent'],
-            ['media:thumbnail', 'mediaThumbnail'] 
+            ['media:thumbnail', 'mediaThumbnail'],
+            ['content:encoded', 'content:encoded'],
+            ['itunes:image', 'itunes:image'],
         ]
     }
 });
@@ -23,36 +27,18 @@ const xmlParser = new XMLParser();
 export async function validateRssUrl(url) {
     try {
         const xmlData = await fetchWithRetry(url);
-
         const parsedXml = xmlParser.parse(xmlData);
-        if (parsedXml.rss && parsedXml.rss.channel && parsedXml.rss.channel.item) {
-            return {
-                isValid: true,
-                title: parsedXml.rss.channel.title || 'Untitled Feed'
-            };
+        if (parsedXml.rss?.channel?.item) {
+            return { isValid: true, title: parsedXml.rss.channel.title || 'Untitled Feed' };
         }
-        if (parsedXml.feed && parsedXml.feed.feed.entry) { 
-            return {
-                isValid: true,
-                title: parsedXml.feed.title || 'Untitled Feed'
-            };
+        if (parsedXml.feed?.entry) {
+            return { isValid: true, title: parsedXml.feed.title || 'Untitled Feed' };
         }
         return { isValid: false, title: null };
     } catch (error) {
-        console.error(`[RSS Validator] Error validating ${url}:`, error.message);
+        log(`Error validating ${url}:`, 'error', null, error, 'error');
         return { isValid: false, title: null };
     }
-}
-
-/**
- * Helper function to extract the first image URL from an HTML string.
- * @param {string} htmlString The HTML content to parse.
- * @returns {string | null} The URL of the first image found, or null if none.
- */
-function extractImageUrlFromHtml(htmlString) {
-    if (!htmlString) return null;
-    const imgMatch = htmlString.match(/<img[^>]+src="([^">]+)"/);
-    return imgMatch ? imgMatch[1] : null;
 }
 
 /**
@@ -61,12 +47,12 @@ function extractImageUrlFromHtml(htmlString) {
  * @returns {string} The text with common HTML entities decoded.
  */
 function decodeHtmlEntities(text) {
-    if (!text) return '';
-    return he.decode(text);
+    return text ? he.decode(text) : '';
 }
 
 /**
  * Sends the latest entry from a given feed to a specified Discord channel.
+ * This version uses the .imageUrl property added by attachImagesToItems.
  * @param {object} feed The parsed feed object from rss-parser.
  * @param {object} latestItem The latest item object from the feed.
  * @param {import('discord.js').TextChannel | import('discord.js').NewsChannel} channel The Discord text or announcement channel to send the embed to.
@@ -74,9 +60,9 @@ function decodeHtmlEntities(text) {
  * @returns {Promise<void>}
  */
 async function sendLatestFeedEntry(feed, latestItem, channel, guildName) {
-    let title = decodeHtmlEntities(latestItem.title || 'New Post');
-    let description = decodeHtmlEntities(latestItem.contentSnippet ? latestItem.contentSnippet.substring(0, 400) : 'No description available.');
-    let feedTitle = decodeHtmlEntities(feed.title);
+    const title = decodeHtmlEntities(latestItem.title || 'New Post');
+    const description = decodeHtmlEntities(latestItem.contentSnippet?.substring(0, 400) || 'No description available.');
+    const feedTitle = decodeHtmlEntities(feed.title);
 
     const embed = new EmbedBuilder()
         .setColor('#0099ff')
@@ -86,141 +72,110 @@ async function sendLatestFeedEntry(feed, latestItem, channel, guildName) {
         .setFooter({ text: `From ${feedTitle}` })
         .setTimestamp(latestItem.isoDate ? new Date(latestItem.isoDate) : new Date());
 
-    let imageUrl = null;
-    if (latestItem.mediaContent && latestItem.mediaContent.$ && latestItem.mediaContent.$.url) {
-        imageUrl = latestItem.mediaContent.$.url;
-    } else if (latestItem.mediaThumbnail && latestItem.mediaThumbnail.$ && latestItem.mediaThumbnail.$.url) {
-        imageUrl = latestItem.mediaThumbnail.$.url;
-    }
-    else if (latestItem.media) {
-        if (Array.isArray(latestItem.media.content) && latestItem.media.content.length > 0 && latestItem.media.content[0].url) {
-            imageUrl = latestItem.media.content[0].url;
-        } else if (typeof latestItem.media.content === 'object' && latestItem.media.content.url) {
-            imageUrl = latestItem.media.content.url;
-        } else if (Array.isArray(latestItem.media.thumbnail) && latestItem.media.thumbnail.length > 0 && latestItem.media.thumbnail[0].url) {
-            imageUrl = latestItem.media.thumbnail[0].url;
-        } else if (typeof latestItem.media.thumbnail === 'object' && latestItem.media.thumbnail.url) {
-            imageUrl = latestItem.media.thumbnail.url;
-        } else if (latestItem.media.url && latestItem.media.type && latestItem.media.type.startsWith('image')) {
-            imageUrl = latestItem.media.url;
-        }
-    }
-    else if (latestItem.enclosure && latestItem.enclosure.url && latestItem.enclosure.type && latestItem.enclosure.type.startsWith('image')) {
-        imageUrl = latestItem.enclosure.url;
-    }
-    else if (latestItem.image && latestItem.image.url) {
-        imageUrl = latestItem.image.url;
-    }
-    else if (latestItem.itunes && latestItem.itunes.image && latestItem.itunes.image.url) {
-        imageUrl = latestItem.itunes.image.url;
-    }
-    else if (latestItem.content) {
-        imageUrl = extractImageUrlFromHtml(latestItem.content);
-    } else if (latestItem.description) {
-        imageUrl = extractImageUrlFromHtml(latestItem.description);
+    if (latestItem.imageUrl) {
+        embed.setImage(latestItem.imageUrl);
     }
 
-    if (imageUrl) {
-        embed.setImage(imageUrl);
-    }
     try {
         await channel.send({ embeds: [embed] });
-        console.log(`[RSS Poller] Posted new entry from "${feedTitle}" to #${channel.name} in "${guildName}".`);
+        log(`[RSS] Posted from "${feedTitle}" to #${channel.name} in "${guildName}".`, 'info');
     } catch (error) {
-        if (error instanceof DiscordAPIError && error.code === 50013) { 
-            console.error(`[RSS Poller] Missing permissions to send messages in channel #${channel.name} (${channel.id}) in guild "${guildName}" (${channel.guild.id}). Please check bot permissions and channel overwrites.`);
-        } else {
-            console.error(`[RSS Poller] Failed to send message to channel #${channel.name} in "${guildName}":`, error.message);
-        }
+        log(`[RSS] Failed to post from "${feedTitle}":`, 'error', null, error, 'error');
     }
 }
 
 /**
- * Polls all registered RSS feeds for new entries.
- * @param {import('discord.js').Client} client The Discord client instance.
+ * Checks all stored RSS feeds for new entries and posts them to their respective channels.
+ * @param {import('discord.js').Client} client The Discord client.
+ * @returns {Promise<void>}
  */
 export async function pollFeeds(client) {
-    console.log('[RSS Poller] Starting feed check...');
-    const allFeeds = await getAllFeeds(); 
-    if (!(allFeeds instanceof Map)) {
-        console.error('[RSS Poller] getAllFeeds did not return a Map. Skipping feed check.');
-        return;
-    }
-
-    for (const [guildId, feeds] of allFeeds.entries()) {
-        const guild = await client.guilds.fetch(guildId).catch(() => null);
-        if (!guild) {
-            console.warn(`[RSS Poller] Could not find guild ${guildId}, skipping.`);
-            continue;
-        }
-
-        for (const feedConfig of feeds) {
+    const feedsByGuild = await getAllFeeds();
+    for (const [guildId, feeds] of feedsByGuild) {
+        for (const feed of feeds) {
             try {
-                const feed = await parser.parseURL(feedConfig.url);
-                if (!feed.items || feed.items.length === 0) continue;
-                const latestItem = feed.items[0];
+                log(`[RSS] Checking feed: ${feed.url}`, 'info');
+
+                const feedContent = await parser.parseURL(feed.url);
+                if (!feedContent.items?.length) {
+                    log(`[RSS] Feed ${feed.url} has no items. Skipping.`, 'warn');
+                    continue;
+                }
+                feedContent.items = await attachImagesToItems(feedContent.items, {
+                    siteUrl: feedContent.link || feed.url,
+                    verifyWithHEAD: true,
+                    scrapePageForOG: true
+                });
+                const latestItem = feedContent.items[0];
                 const newGuid = latestItem.guid || latestItem.link || latestItem.title;
 
-                if (feedConfig.lastGuid === null || (newGuid && newGuid !== feedConfig.lastGuid)) {
-                    const channel = await guild.channels.fetch(feedConfig.channelId).catch(() => null);
+                if (newGuid && newGuid !== feed.lastGuid) {
+                    const guild = await client.guilds.fetch(guildId).catch(() => null);
+                    if (!guild) continue;
+
+                    const channel = await guild.channels.fetch(feed.channelId).catch(() => null);
                     if (channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)) {
-                        await sendLatestFeedEntry(feed, latestItem, channel, guild.name);
+                        await sendLatestFeedEntry(feedContent, latestItem, channel, guild.name);
+                        await updateLastGuid(guildId, feed.url, feed.channelId, newGuid);
                     }
-                    await updateLastGuid(guildId, feedConfig.url, feedConfig.channelId, newGuid);
                 }
             } catch (error) {
-                console.error(`[RSS Poller] Failed to process feed ${feedConfig.url} for guild ${guildId}:`, error.message);
+                log(`[RSS] Error processing feed ${feed.url}:`, 'error', null, error, 'error');
             }
         }
     }
-    console.log('[RSS Poller] Finished feed check.');
 }
 
 /**
- * Adds a new RSS feed and immediately posts the latest article to the specified channel.
- * @param {import('discord.js').Client} client The Discord client instance.
- * @param {string} guildId The ID of the Discord guild.
- * @param {string} channelId The ID of the Discord channel.
- * @param {string} rssUrl The URL of the RSS feed.
- * @returns {Promise<boolean>} True if the feed was added and the first article was posted successfully, false otherwise.
+ * Adds a new RSS feed subscription and posts the latest article to the specified channel.
+ * @param {import('discord.js').Client} client The Discord client.
+ * @param {string} guildId The ID of the guild.
+ * @param {string} channelId The ID of the channel to post updates to.
+ * @param {string} rssUrl The URL of the RSS feed to subscribe to.
+ * @returns {Promise<boolean>} True if the feed was added successfully, false otherwise.
  */
-export async function addAndPostFirstArticle(client, guildId, channelId, rssUrl) {
+export async function addRssFeedAndPostLatest(client, guildId, channelId, rssUrl) {
     try {
         const validation = await validateRssUrl(rssUrl);
         if (!validation.isValid) {
-            console.error(`[RSS Add] Invalid RSS URL: ${rssUrl}`);
+            log(`[RSS Add] URL ${rssUrl} is not a valid RSS feed.`, 'warn');
             return false;
         }
 
         const guild = await client.guilds.fetch(guildId).catch(() => null);
         if (!guild) {
-            console.warn(`[RSS Add] Could not find guild ${guildId}.`);
+            log(`[RSS Add] Could not find guild ${guildId}.`, 'warn');
             return false;
         }
 
         const channel = await guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !(channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)) {
-            console.warn(`[RSS Add] Could not find text or announcement channel ${channelId} in guild ${guildId}.`);
+            log(`[RSS Add] Could not find text or announcement channel ${channelId} in guild ${guildId}.`, 'warn');
             return false;
         }
 
         const feed = await parser.parseURL(rssUrl);
-        if (!feed.items || feed.items.length === 0) {
-            console.warn(`[RSS Add] Feed ${rssUrl} has no items.`);
-            await addFeed(guildId, rssUrl, channelId, null, validation.title); 
+        if (!feed.items?.length) {
+            log(`[RSS Add] Feed ${rssUrl} has no items.`, 'warn');
+            await addFeed(guildId, rssUrl, channelId, null, validation.title);
             return false;
         }
 
+        feed.items = await attachImagesToItems(feed.items, {
+            siteUrl: feed.link || rssUrl,
+            verifyWithHEAD: true,
+            scrapePageForOG: true
+        });
+
         const latestItem = feed.items[0];
         const newGuid = latestItem.guid || latestItem.link || latestItem.title;
+        await sendLatestFeedEntry(feed, latestItem, channel, guild.name);
+        await addFeed(guildId, rssUrl, channelId, newGuid, validation.title);
 
-        const sendSuccess = await sendLatestFeedEntry(feed, latestItem, channel, guild.name);
-
-        await addFeed(guildId, rssUrl, channelId, newGuid, validation.title); 
-        console.log(`[RSS Add] Successfully added feed "${validation.title}" and posted first article to #${channel.name} in "${guild.name}".`);
+        log(`[RSS Add] Added feed "${validation.title}" and posted first article to #${channel.name} in "${guild.name}".`, 'info');
         return true;
     } catch (error) {
-        console.error(`[RSS Add] Error adding and posting first article for ${rssUrl}:`, error.message);
+        log(`[RSS Add] Error adding feed ${rssUrl}:`, 'error', null, error, 'error');
         return false;
     }
 }

@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits }  from 'discord.js';
 import { addFeed, removeFeed, getGuildFeeds } from '../../services/rssDbManager.js';
-import { validateRssUrl, addAndPostFirstArticle } from '../../services/rssService.js'; // Changed pollFeeds to addAndPostFirstArticle
+import { validateRssUrl, pollFeeds } from '../../services/rssService.js';
 
 /**
  * Defines the RSS slash command and its subcommands.
@@ -81,8 +81,7 @@ export async function execute(interaction) {
             return interaction.editReply({ content: 'Feeds can only be posted to text or announcement channels.', ephemeral: true });
         }
         try {
-            // Use the new addAndPostFirstArticle function
-            const success = await addAndPostFirstArticle(interaction.client, guildId, channel.id, url);
+            const success = await pollFeeds(interaction.client, guildId, channel.id, url);
 
             if (success) {
                 const feeds = await getGuildFeeds(guildId);

@@ -3,6 +3,8 @@ import * as cheerio from "cheerio";
 import { HttpProxyAgent } from "http-proxy-agent";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import puppeteer from "puppeteer";
+// Import the new logging system
+import { log } from '../utils/debug.js';
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
@@ -28,9 +30,10 @@ export async function fetchWithRetry(url, retries = 3, timeout = 60000) {
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         try {
-        console.log(
+        // Use the new log function
+        log(
             `[Axios Attempt ${attempt}/${retries}] Fetching ${url}` +
-            (proxyUrl ? ` via proxy: ${proxyUrl}` : " directly")
+            (proxyUrl ? ` via proxy: ${proxyUrl}` : " directly"), 'info'
         );
 
         const axiosInstance = axios.create({
@@ -50,131 +53,122 @@ export async function fetchWithRetry(url, retries = 3, timeout = 60000) {
         const { data } = await axiosInstance.get(url);
 
         if (!data || data.length < 500) {
-            console.warn(`[Axios] Data for ${url} is too small or empty (${data ? data.length : 0} bytes). Triggering retry or Puppeteer fallback.`);
+            // Use the new log function
+            log(`[Axios] Data for ${url} is too small or empty (${data ? data.length : 0} bytes). Triggering retry or Puppeteer fallback.`, 'warn');
             throw new Error("Incomplete or empty data from Axios.");
         }
-        console.log(`[Axios Success] Fetched ${url} with ${data.length} bytes.`);
+        // Use the new log function
+        log(`[Axios Success] Fetched ${url} with ${data.length} bytes.`, 'info');
         return data;
         } catch (err) {
-        console.error(
-            `[Axios Attempt ${attempt}] Failed to fetch ${url}. Error: ${err.message}`
+        // Use the new log function
+        log(
+            `[Axios Attempt ${attempt}] Failed to fetch ${url}. Error: ${err.message}`, 'error'
         );
         if (err.response) {
-            console.error(`[Axios] HTTP Status: ${err.response.status}, Response Data (first 200 chars): ${String(err.response.data).substring(0, 200)}`);
+            log(`[Axios] HTTP Status: ${err.response.status}, Response Data (first 200 chars): ${String(err.response.data).substring(0, 200)}`, 'error');
         } else if (err.request) {
-            console.error(`[Axios] No response received. Request made but no data.`);
+            log(`[Axios] No response received. Request made but no data.`, 'error');
         } else {
-            console.error(`[Axios] Error setting up request: ${err.message}`);
+            log(`[Axios] Error setting up request: ${err.message}`, 'error');
         }
-
-        if (attempt < retries) {
-            const waitTime = 5000 * attempt;
-            console.warn(`Retrying Axios in ${waitTime / 1000}s...`);
-            await new Promise((r) => setTimeout(r, waitTime));
+        if (attempt === retries) {
+            log(`[Axios] All attempts failed. Initiating Puppeteer fallback.`, 'warn');
+            break;
         }
         }
     }
 
-    console.log(`[Puppeteer Fallback] Axios failed after ${retries} attempts for ${url}. Launching Puppeteer...`);
-    let browser;
     try {
-        browser = await puppeteer.launch({
-        headless: "new",
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-gpu',
-            '--disable-dev-shm-usage',
-            '--single-process',
-            ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
-        ],
-        ignoreHTTPSErrors: true,
-        });
+        // Use the new log function
+        log(`[Puppeteer] Starting Puppeteer fallback for ${url}`, 'info');
 
+        const browser = await puppeteer.launch({
+            args: ["--no-sandbox", "--disable-setuid-sandbox"],
+            headless: "new"
+        });
         const page = await browser.newPage();
         await page.setUserAgent(randomUserAgent);
-
-        page.on('console', msg => console.log(`[Browser Console] ${msg.text()}`));
-        page.on('pageerror', err => console.error(`[Browser Page Error] ${err.message}`));
-        page.on('requestfailed', request => console.error(`[Browser Request Failed] ${request.url()} ${request.failure().errorText}`));
-
-        await page.goto(url, { waitUntil: 'networkidle0', timeout: timeout * 3 });
-
+        await page.goto(url, { waitUntil: "networkidle2", timeout });
         const htmlContent = await page.content();
-        console.log(`[Puppeteer Success] Fetched ${url} with Puppeteer. Content length: ${htmlContent.length} bytes.`);
-        return htmlContent;
-    } catch (puppeteerErr) {
-        console.error(`[Puppeteer Fallback] Failed to fetch ${url} with Puppeteer. Error: ${puppeteerErr.message}`);
-        throw new Error(`Failed to fetch ${url} after Axios retries and Puppeteer fallback: ${puppeteerErr.message}`);
-    } finally {
-        if (browser) {
         await browser.close();
+
+        if (!htmlContent || htmlContent.length < 500) {
+            log(`[Puppeteer] Data for ${url} is too small or empty (${htmlContent ? htmlContent.length : 0} bytes).`, 'warn');
+            throw new Error("Incomplete or empty data from Puppeteer.");
         }
+
+        log(`[Puppeteer Success] Fetched ${url} with ${htmlContent.length} bytes.`, 'info');
+        return htmlContent;
+    } catch (err) {
+        log(`[Puppeteer] Failed to fetch ${url} via Puppeteer: ${err.message}`, 'error');
+        throw new Error(`Failed to fetch ${url} after multiple attempts.`);
     }
 }
 
 /**
- * Scrapes the latest notices from the IOE Examination Control Division website.
+ * Scrapes IOE Exam notices from the official website.
  * @returns {Promise<Array<object>>} - A list of notice objects.
  */
 export async function scrapeIoeExamNotice() {
+    // Reverted URL and selectors to the previous working version
     const url = "http://exam.ioe.edu.np/";
+    log(`[scrapeIoeExamNotice] Scraping ${url}`, 'info');
     try {
-        const data = await fetchWithRetry(url);
-        const $ = cheerio.load(data);
+        const html = await fetchWithRetry(url);
+        const $ = cheerio.load(html);
         const notices = [];
 
         $("#datatable tbody tr").each((_, el) => {
-        const row = $(el);
-        const titleElement = row.find("td:nth-child(2) a");
-        const dateElement = row.find("td:nth-child(3)");
-        const viewLinkElement = row.find(
-            'td:nth-child(4) a[href*="/Notice/Index/"]'
-        );
-        const downloadLinkElement = row.find(
-            'td:nth-child(4) a[target="_blank"]'
-        );
+            const row = $(el);
+            const titleElement = row.find("td:nth-child(2) a");
+            const dateElement = row.find("td:nth-child(3)");
+            const viewLinkElement = row.find(
+                'td:nth-child(4) a[href*="/Notice/Index/"]'
+            );
+            const downloadLinkElement = row.find(
+                'td:nth-child(4) a[target="_blank"]'
+            );
 
-        if (
-            titleElement.length &&
-            dateElement.length &&
-            viewLinkElement.length &&
-            downloadLinkElement.length
-        ) {
-            const title = titleElement.text().trim();
-            const date = dateElement.text().trim();
-            const noticePageLink = new URL(viewLinkElement.attr("href"), url).href;
-            const pdfLink = new URL(downloadLinkElement.attr("href"), url).href;
+            if (titleElement.length && dateElement.length && viewLinkElement.length && downloadLinkElement.length) {
+                const title = titleElement.text().trim();
+                const date = dateElement.text().trim();
+                const noticePageLink = new URL(viewLinkElement.attr("href"), url).href;
+                const pdfLink = new URL(downloadLinkElement.attr("href"), url).href;
 
-            notices.push({
-            title,
-            link: noticePageLink,
-            attachments: [pdfLink],
-            date,
-            source: "IOE Exam Section",
-            });
-        }
+                notices.push({
+                    title,
+                    link: noticePageLink,
+                    attachments: [pdfLink],
+                    date,
+                    source: "IOE Exam Section",
+                });
+            }
         });
-
+        log(`[scrapeIoeExamNotice] Scraped ${notices.length} notices.`, 'info');
         return notices;
     } catch (err) {
-        console.error("[scrapeIoeExamNotice] Error during scraping or parsing:", err.message);
+        log("[scrapeIoeExamNotice] Error during scraping or parsing:", 'error', null, err, 'error');
         return [];
     }
 }
 
+
 /**
- * Scrapes all recent notices from the Pulchowk Campus website's homepage widget.
+ * Scrapes Pulchowk Campus notices. This is a more complex scraper that handles pagination and dynamic content.
  * @returns {Promise<Array<object>>} - A list of notice objects.
  */
 export async function scrapePcampusNotice() {
+    // Reverted URL and selectors to the previous working version
     const listUrl = "https://pcampus.edu.np/";
+    log(`[scrapePcampusNotice] Scraping ${listUrl}`, 'info');
+
     try {
         const listData = await fetchWithRetry(listUrl);
         const $list = cheerio.load(listData);
         const noticeItems = $list("#recent-posts-2 ul li"); 
         if (noticeItems.length === 0) {
-            console.warn("[scrapePcampusNotice] Could not find any notices in the widget.");
+            log("[scrapePcampusNotice] Could not find any notices in the widget.", 'warn');
             return []; 
         }
         const noticeDetailPromises = [];
@@ -198,7 +192,7 @@ export async function scrapePcampusNotice() {
                         });
                         return { title, link: pageLink, attachments: [...new Set(attachments)], date, source: "Pulchowk Campus" };
                     } catch (err) {
-                        console.error(`[scrapePcampusNotice] Failed to fetch details for ${pageLink}. Error: ${err.message}`);
+                        log(`[scrapePcampusNotice] Failed to fetch details for ${pageLink}. Error: ${err.message}`, 'error');
                         return null; 
                     }
                 })();
@@ -208,17 +202,18 @@ export async function scrapePcampusNotice() {
         const results = await Promise.all(noticeDetailPromises);
         return results.filter(notice => notice !== null);
     } catch (err) {
-        console.error("[scrapePcampusNotice] Error during scraping or parsing:", err.message);
+        log("[scrapePcampusNotice] Error during scraping or parsing:", 'error', null, err, 'error');
         return []; 
     }
 }
+
 
 /**
  * Scrapes and combines the latest notices from all sources.
  * @returns {Promise<Array<object>>} - A combined list of notice objects.
  */
 export async function scrapeLatestNotice() {
-    console.log("Scraping latest notices from all sources...");
+    log("Scraping latest notices from all sources...", 'info');
     const [ioe, pcampus] = await Promise.allSettled([
         scrapeIoeExamNotice(),
         scrapePcampusNotice(),
@@ -229,13 +224,13 @@ export async function scrapeLatestNotice() {
     if (ioe.status === 'fulfilled' && ioe.value) {
         combinedNotices = [...combinedNotices, ...ioe.value];
     } else {
-        console.error("[scrapeLatestNotice] IOE Exam Notice scraping failed:", ioe.reason);
+        log("[scrapeLatestNotice] IOE Exam Notice scraping failed:", 'error', null, ioe.reason, 'error');
     }
 
     if (pcampus.status === 'fulfilled' && pcampus.value) {
         combinedNotices = [...combinedNotices, ...pcampus.value];
     } else {
-        console.error("[scrapeLatestNotice] Pulchowk Campus Notice scraping failed:", pcampus.reason);
+        log("[scrapeLatestNotice] Pulchowk Campus Notice scraping failed:", 'error', null, pcampus.reason, 'error');
     }
 
     return combinedNotices;

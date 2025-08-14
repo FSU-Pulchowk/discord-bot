@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, PermissionsBitField, ChannelType, EmbedBuilder } from 'discord.js';
-import { db } from '../database.js'; // Adjust the path to your database.js file if necessary
+import { db } from '../../database.js';
 
 // --- Database Interaction Helpers (Promisified) ---
 
@@ -86,7 +86,6 @@ export async function execute(interaction) {
  * @param {import('discord.js').Guild} guild
  */
 async function handleSave(interaction, guild) {
-    // 1. Fetch all roles, excluding @everyone
     const roles = (await guild.roles.fetch())
         .filter(role => role.id !== guild.id) // Exclude @everyone role
         .map(role => ({
@@ -99,7 +98,6 @@ async function handleSave(interaction, guild) {
             mentionable: role.mentionable,
         }));
 
-    // 2. Fetch all channels
     const channels = (await guild.channels.fetch())
         .map(channel => ({
             id: channel.id,
@@ -108,16 +106,14 @@ async function handleSave(interaction, guild) {
             position: channel.position,
             parentId: channel.parentId,
             topic: 'topic' in channel ? channel.topic : null,
-            // Serialize permission overwrites
             permissionOverwrites: channel.permissionOverwrites.cache.map(ow => ({
-                id: ow.id, // Role or User ID
-                type: ow.type, // 0 for role, 1 for member
+                id: ow.id, 
+                type: ow.type, 
                 allow: ow.allow.bitfield.toString(),
                 deny: ow.deny.bitfield.toString(),
             })),
         }));
 
-    // 3. Serialize into a single JSON object
     const backupData = {
         savedAt: Date.now(),
         guildId: guild.id,
@@ -128,10 +124,8 @@ async function handleSave(interaction, guild) {
 
     const jsonBackup = JSON.stringify(backupData, null, 2);
 
-    // 4. Store the JSON in the database
     await saveBackupToDB(guild.id, jsonBackup);
 
-    // 5. Confirm success
     const successEmbed = new EmbedBuilder()
         .setColor('#00FF00')
         .setTitle('✅ Backup Saved')
@@ -147,7 +141,6 @@ async function handleSave(interaction, guild) {
  * @param {import('discord.js').Guild} guild
  */
 async function handleRestore(interaction, guild) {
-    // 1. Fetch the backup from the database
     const backup = await getBackupFromDB(guild.id);
     if (!backup) {
         return interaction.editReply({ content: '❌ No backup found for this server. Please run `/setupfsu save` first.', ephemeral: true });
@@ -228,8 +221,6 @@ async function handleRestore(interaction, guild) {
         }
     }
 
-
-    // 6. Confirm success
     const successEmbed = new EmbedBuilder()
         .setColor('#00FF00')
         .setTitle('✅ Restore Complete')

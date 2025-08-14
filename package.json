@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node ./src/bot.js",
+    "start:debug": "node ./src/bot.js --debug",
+    "start:debug-help": "node ./src/utils/debug.js --help-debug",
     "scrape": "node ./scrape.js",
     "deploy-commands-guild": "node deploy-commands.js --guild",
     "deploy-commands-global": "node deploy-commands.js --global"
@@ -16,7 +18,7 @@
   "dependencies": {
     "axios": "^1.11.0",
     "axis": "^1.0.0",
-    "cheerio": "^1.1.0",
+    "cheerio": "^1.1.2",
     "chrome-aws-lambda": "^1.20.1",
     "discord.js": "^14.21.0",
     "dotenv": "^17.0.1",

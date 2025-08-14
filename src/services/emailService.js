@@ -1,9 +1,10 @@
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
+import { log } from '../utils/debug.js';
 
 dotenv.config();
 
-class EmailService {
+class emailService {
     constructor() {
         this.googleClientId = process.env.GOOGLE_CLIENT_ID;
         this.googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
@@ -27,7 +28,7 @@ class EmailService {
      */
     validateConfig() {
         if (!this.googleClientId || !this.googleClientSecret || !this.redirectUri || !this.refreshToken || !this.senderEmail) {
-            console.error("Missing one or more Google API environment variables. Please check your .env file.");
+            log("Missing one or more Google API environment variables. Please check your .env file.", 'error');
             process.exit(1);
         }
     }
@@ -43,39 +44,32 @@ class EmailService {
     async sendEmail(to, subject, htmlContent) {
         try {
             const { token: accessToken } = await this.oAuth2Client.getAccessToken();
-            if (!accessToken) {
-                throw new Error('Failed to obtain Google API access token.');
-            }
+            const transport = google.gmail({ version: 'v1', auth: this.oAuth2Client });
 
-            const gmail = google.gmail({ version: 'v1', auth: this.oAuth2Client });
-
-            const message = [
+            const emailContent = [
+                `From: ${this.senderEmail}`,
                 `To: ${to}`,
                 `Subject: ${subject}`,
-                'MIME-Version: 1.0',
-                'Content-Type: text/html; charset="UTF-8"', 
-                '',
-                htmlContent,
+                `Content-Type: text/html; charset=utf-8`,
+                ``,
+                htmlContent
             ].join('\n');
 
-            const encodedMessage = Buffer.from(message).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+            const base64EncodedEmail = Buffer.from(emailContent).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
 
-            const res = await gmail.users.messages.send({
-                userId: this.senderEmail,
+            const res = await transport.users.messages.send({
+                userId: 'me',
                 requestBody: {
-                    raw: encodedMessage,
+                    raw: base64EncodedEmail,
                 },
             });
+            log(`Email sent to ${to}: ${res.data.id}`, 'info');
             return res.data;
         } catch (error) {
-            console.error('Error sending email:', error.message);
-            if (error.code === 401) {
-                console.error('Possible reason: Refresh token expired or invalid. Try regenerating it in OAuth Playground.');
-            }
+            log(`Error sending email to ${to}:`, 'error', null, error, 'error');
             throw error;
         }
     }
 }
 
-const emailService = new EmailService();
-export { emailService };
+export {emailService};

@@ -1,4 +1,5 @@
 import { db } from '../database.js';
+import { log } from '../utils/debug.js';
 
 /**
  * Adds a new RSS feed subscription to the database.
@@ -15,7 +16,7 @@ export function addFeed(guildId, url, channelId, lastGuid, title) {
         const sql = `INSERT OR REPLACE INTO rss_feeds (guild_id, channel_id, url, last_guid, title) VALUES (?, ?, ?, ?, ?)`;
         db.run(sql, [guildId, channelId, url, lastGuid, title], (err) => {
             if (err) {
-                console.error("Database error in addFeed:", err.message);
+                log("Database error in addFeed:", 'error', null, err, 'error');
                 return reject(err);
             }
             resolve();
@@ -36,7 +37,8 @@ export function updateLastGuid(guildId, url, channelId, lastGuid) {
         const sql = `UPDATE rss_feeds SET last_guid = ? WHERE guild_id = ? AND channel_id = ? AND url = ?`;
         db.run(sql, [lastGuid, guildId, channelId, url], (err) => {
             if (err) {
-                console.error("Database error in updateLastGuid:", err.message);
+                // Use the new log function
+                log("Database error in updateLastGuid:", 'error', null, err, 'error');
                 return reject(err);
             }
             resolve();
@@ -47,28 +49,30 @@ export function updateLastGuid(guildId, url, channelId, lastGuid) {
 /**
  * Retrieves all feed subscriptions and groups them by guild.
  * @returns {Promise<Map<string, Array<{url: string, channelId: string, lastGuid: string | null, title: string | null}>>>}
+ * A map where keys are guild IDs and values are arrays of feed objects.
  */
 export function getAllFeeds() {
     return new Promise((resolve, reject) => {
-        const sql = `SELECT guild_id, channel_id, url, last_guid, title FROM rss_feeds`;
+        const sql = `SELECT guild_id, url, channel_id, last_guid, title FROM rss_feeds`;
         db.all(sql, [], (err, rows) => {
             if (err) {
-                console.error("Database error in getAllFeeds:", err.message);
+                log("Database error in getAllFeeds:", 'error', null, err, 'error');
                 return reject(err);
             }
 
             const feedsByGuild = new Map();
-            for (const row of rows) {
-                if (!feedsByGuild.has(row.guild_id)) {
-                    feedsByGuild.set(row.guild_id, []);
-                }
-                feedsByGuild.get(row.guild_id).push({
+            rows.forEach(row => {
+                const feed = {
                     url: row.url,
                     channelId: row.channel_id,
                     lastGuid: row.last_guid,
-                    title: row.title // Include title
-                });
-            }
+                    title: row.title
+                };
+                if (!feedsByGuild.has(row.guild_id)) {
+                    feedsByGuild.set(row.guild_id, []);
+                }
+                feedsByGuild.get(row.guild_id).push(feed);
+            });
             resolve(feedsByGuild);
         });
     });
@@ -77,7 +81,7 @@ export function getAllFeeds() {
 /**
  * Removes an RSS feed subscription from the database.
  * @param {string} guildId The ID of the guild.
- * @param {string} url The URL of the RSS feed to remove.
+ * @param {string} url The URL of the feed to remove.
  * @returns {Promise<boolean>} True if a feed was removed, false otherwise.
  */
 export function removeFeed(guildId, url) {
@@ -85,7 +89,7 @@ export function removeFeed(guildId, url) {
         const sql = `DELETE FROM rss_feeds WHERE guild_id = ? AND url = ?`;
         db.run(sql, [guildId, url], function(err) {
             if (err) {
-                console.error("Database error in removeFeed:", err.message);
+                log("Database error in removeFeed:", 'error', null, err, 'error');
                 return reject(err);
             }
             resolve(this.changes > 0);
@@ -101,18 +105,17 @@ export function removeFeed(guildId, url) {
  */
 export function getGuildFeeds(guildId) {
     return new Promise((resolve, reject) => {
-        // Include 'title' in the SELECT statement
         const sql = `SELECT url, channel_id, last_guid, title FROM rss_feeds WHERE guild_id = ?`;
         db.all(sql, [guildId], (err, rows) => {
             if (err) {
-                console.error("Database error in getGuildFeeds:", err.message);
+                log("Database error in getGuildFeeds:", 'error', null, err, 'error');
                 return reject(err);
             }
             const feeds = rows.map(row => ({
                 url: row.url,
                 channelId: row.channel_id,
                 lastGuid: row.last_guid,
-                title: row.title 
+                title: row.title
             }));
             resolve(feeds);
         });

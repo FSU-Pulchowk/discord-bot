@@ -1,14 +1,13 @@
 import sqlite3 from 'sqlite3';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { log } from './utils/debug.js';
 
-// Get the current file's path and directory name
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Define the path to the SQLite database file
 const dbPath = path.resolve(__dirname, '../bot.db');
 
-let db; // Variable to hold the database connection object
+let db;
 
 /**
  * Initializes the SQLite database, creating tables and performing necessary migrations if they don't exist.
@@ -20,10 +19,10 @@ async function initializeDatabase() {
         // Connect to the SQLite database. If the file doesn't exist, it will be created.
         db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
             if (err) {
-                console.error('Error connecting to database:', err.message);
+                log('Error connecting to database:', 'error', null, err, 'error');
                 return reject(err);
             }
-            console.log('Connected to the SQLite database.');
+            log('Connected to the SQLite database.', 'init');
 
             // Serialize ensures that database operations run in sequence
             db.serialize(() => {
@@ -48,12 +47,18 @@ async function initializeDatabase() {
                     rep_lockout_duration_ms INTEGER DEFAULT 86400000,
                     rep_to_clear_warn INTEGER DEFAULT 20,
                     UNIQUE(guild_id) ON CONFLICT REPLACE
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating guild_configs table:', 'error', null, err, 'error');
+                    } else {
+                        log('Guild configs table checked/created.', 'init');
+                    }
+                });
 
                 // Migrations for guild_configs: Add new columns if they don't exist
                 db.all("PRAGMA table_info(guild_configs)", (err, columns) => {
                     if (err) {
-                        console.error("Error checking guild_configs schema:", err.message);
+                        log("Error checking guild_configs schema:", 'error', null, err, 'error');
                         return;
                     }
                     const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
@@ -68,9 +73,9 @@ async function initializeDatabase() {
                         if (!columnNames.includes(col.name)) {
                             db.run(`ALTER TABLE guild_configs ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`, (alterErr) => {
                                 if (alterErr) {
-                                    console.error(`Error adding ${col.name} to guild_configs:`, alterErr.message);
+                                    log(`Error adding ${col.name} to guild_configs:`, 'error', null, alterErr, 'error');
                                 } else {
-                                    console.log(`Added ${col.name} column to guild_configs.`);
+                                    log(`Added ${col.name} column to guild_configs.`, 'init');
                                 }
                             });
                         }
@@ -92,7 +97,13 @@ async function initializeDatabase() {
                     emoji TEXT NOT NULL,
                     role_id TEXT NOT NULL,
                     UNIQUE(message_id, emoji, guild_id) ON CONFLICT REPLACE
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating reaction_roles table:', 'error', null, err, 'error');
+                    } else {
+                        log('Reaction roles table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * suggestions Table: Stores user suggestions.
@@ -122,7 +133,13 @@ async function initializeDatabase() {
                     reason TEXT,
                     upvotes INTEGER DEFAULT 0,
                     downvotes INTEGER DEFAULT 0
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating suggestions table:', 'error', null, err, 'error');
+                    } else {
+                        log('Suggestions table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * user_stats Table: Stores various statistics for users.
@@ -142,21 +159,27 @@ async function initializeDatabase() {
                     last_message_at INTEGER,
                     reputation_lockout_until INTEGER DEFAULT 0,
                     PRIMARY KEY (user_id, guild_id)
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating user_stats table:', 'error', null, err, 'error');
+                    } else {
+                        log('User stats table checked/created.', 'init');
+                    }
+                });
 
                 // Migration for user_stats: Add 'reputation_lockout_until' column if it doesn't exist
                 db.all("PRAGMA table_info(user_stats)", (err, columns) => {
                     if (err) {
-                        console.error("Error checking user_stats schema:", err.message);
+                        log("Error checking user_stats schema:", 'error', null, err, 'error');
                         return;
                     }
                     const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
                     if (!columnNames.includes("reputation_lockout_until")) {
                         db.run("ALTER TABLE user_stats ADD COLUMN reputation_lockout_until INTEGER DEFAULT 0", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding reputation_lockout_until to user_stats:", alterErr.message);
+                                log("Error adding reputation_lockout_until to user_stats:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added reputation_lockout_until column to user_stats.");
+                                log("Added reputation_lockout_until column to user_stats.", 'init');
                             }
                         });
                     }
@@ -182,7 +205,13 @@ async function initializeDatabase() {
                     set_by TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, guild_id)
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating birthdays table:', 'error', null, err, 'error');
+                    } else {
+                        log('Birthdays table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * warnings Table: Stores moderation warnings issued to users.
@@ -200,7 +229,13 @@ async function initializeDatabase() {
                     moderatorId TEXT NOT NULL,
                     reason TEXT,
                     timestamp INTEGER
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating warnings table:', 'error', null, err, 'error');
+                    } else {
+                        log('Warnings table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * verified_users Table: Stores information about verified users.
@@ -219,7 +254,13 @@ async function initializeDatabase() {
                     discord_username TEXT NOT NULL,
                     email TEXT NOT NULL UNIQUE,
                     verified_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating verified_users table:', 'error', null, err, 'error');
+                    } else {
+                        log('Verified users table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * active_voice_sessions Table: Tracks current active voice chat sessions for users.
@@ -236,7 +277,13 @@ async function initializeDatabase() {
                     channel_id TEXT NOT NULL,
                     join_time INTEGER NOT NULL,
                     PRIMARY KEY (user_id, guild_id)
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating active_voice_sessions table:', 'error', null, err, 'error');
+                    } else {
+                        log('Active voice sessions table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * notices Table: Stores information about scraped notices or announcements.
@@ -251,7 +298,13 @@ async function initializeDatabase() {
                     date TEXT NOT NULL,
                     announced_at INTEGER NOT NULL,
                     PRIMARY KEY (link)
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating notices table:', 'error', null, err, 'error');
+                    } else {
+                        log('Notices table checked/created.', 'init');
+                    }
+                });
 
                 /**
                  * anti_spam_configs Table: Stores anti-spam configuration for each guild.
@@ -270,11 +323,17 @@ async function initializeDatabase() {
                     kick_threshold INTEGER DEFAULT 3,
                     ban_threshold INTEGER DEFAULT 5,
                     UNIQUE(guild_id) ON CONFLICT REPLACE
-                )`);
+                )`, (err) => {
+                    if (err) {
+                        log('Error creating anti_spam_configs table:', 'error', null, err, 'error');
+                    } else {
+                        log('Anti-spam configs table checked/created.', 'init');
+                    }
+                });
                 // Migrations for anti_spam_configs: Add new columns if they don't exist
                 db.all("PRAGMA table_info(anti_spam_configs)", (err, columns) => {
                     if (err) {
-                        console.error("Error checking anti_spam_configs schema:", err.message);
+                        log("Error checking anti_spam_configs schema:", 'error', null, err, 'error');
                         return;
                     }
                     const existingColumns = Array.isArray(columns) ? columns.map(col => col.name) : [];
@@ -290,9 +349,9 @@ async function initializeDatabase() {
                         if (!existingColumns.includes(col.name)) {
                             db.run(`ALTER TABLE anti_spam_configs ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`, (alterErr) => {
                                 if (alterErr) {
-                                    console.error(`Error adding ${col.name} to anti_spam_configs:`, alterErr.message);
+                                    log(`Error adding ${col.name} to anti_spam_configs:`, 'error', null, alterErr, 'error');
                                 } else {
-                                    console.log(`Added ${col.name} column to anti_spam_configs.`);
+                                    log(`Added ${col.name} column to anti_spam_configs.`, 'init');
                                 }
                             });
                         }
@@ -322,34 +381,34 @@ async function initializeDatabase() {
                     )
                 `, (err) => {
                     if (err) {
-                        console.error('Error creating faqs table:', err.message);
+                        log('Error creating faqs table:', 'error', null, err, 'error');
                     } else {
-                        console.log('Faqs table checked/created.');
+                        log('Faqs table checked/created.', 'init');
                     }
                 });
 
                 // Migrations for 'faqs' table: Add 'keywords' and 'created_by' columns
                 db.all("PRAGMA table_info(faqs)", (err, columns) => {
                     if (err) {
-                        console.error("Error checking faqs schema:", err.message);
+                        log("Error checking faqs schema:", 'error', null, err, 'error');
                         return;
                     }
                     const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
                     if (!columnNames.includes("keywords")) {
                         db.run("ALTER TABLE faqs ADD COLUMN keywords TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding keywords column to faqs:", alterErr.message);
+                                log("Error adding keywords column to faqs:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added keywords column to faqs.");
+                                log("Added keywords column to faqs.", 'init');
                             }
                         });
                     }
                     if (!columnNames.includes("created_by")) {
                         db.run("ALTER TABLE faqs ADD COLUMN created_by TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding created_by column to faqs:", alterErr.message);
+                                log("Error adding created_by column to faqs:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added created_by column to faqs.");
+                                log("Added created_by column to faqs.", 'init');
                             }
                         });
                     }
@@ -380,27 +439,9 @@ async function initializeDatabase() {
                     )
                 `, (err) => {
                     if (err) {
-                        console.error('Error creating admin_tasks table:', err.message);
+                        log('Error creating admin_tasks table:', 'error', null, err, 'error');
                     } else {
-                        console.log('Admin tasks table checked/created.');
-                    }
-                });
-                /**
-                 * guild_structure_backups Table: Stores a JSON backup of the guild's structure.
-                 * - guild_id: Unique identifier for the Discord server (Primary Key).
-                 * - backup_data: The JSON string containing role and channel data.
-                 * - saved_at: Unix timestamp of when the backup was saved.
-                 */
-                db.run(`CREATE TABLE IF NOT EXISTS guild_structure_backups (
-                    guild_id TEXT PRIMARY KEY,
-                    backup_data TEXT NOT NULL,
-                    saved_at INTEGER NOT NULL,
-                    UNIQUE(guild_id) ON CONFLICT REPLACE
-                )`, (err) => {
-                    if (err) {
-                        console.error('Error creating guild_structure_backups table:', err.message);
-                    } else {
-                        console.log('Guild structure backups table checked/created.');
+                        log('Admin tasks table checked/created.', 'init');
                     }
                 });
                 /**
@@ -424,23 +465,23 @@ async function initializeDatabase() {
                     )
                 `, (err) => {
                     if (err) {
-                        console.error('Error creating rss_feeds table:', err.message);
+                        log('Error creating rss_feeds table:', 'error', null, err, 'error');
                     } else {
-                        console.log('Rss_feeds table checked/created.');
+                        log('Rss_feeds table checked/created.', 'init');
                     }
                 });
                 db.all("PRAGMA table_info(rss_feeds)", (err, columns) => {
                     if (err) {
-                        console.error("Error checking rss_feeds schema:", err.message);
+                        log("Error checking rss_feeds schema:", 'error', null, err, 'error');
                         return;
                     }
                     const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
                     if (!columnNames.includes("title")) {
                         db.run("ALTER TABLE rss_feeds ADD COLUMN title TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding title column to rss_feeds:", alterErr.message);
+                                log("Error adding title column to rss_feeds:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added title column to rss_feeds.");
+                                log("Added title column to rss_feeds.", 'init');
                             }
                         });
                     }
@@ -448,7 +489,7 @@ async function initializeDatabase() {
                 // Migrations for 'admin_tasks' table: Ensure correct column names and types
                 db.all("PRAGMA table_info(admin_tasks)", (err, columns) => {
                     if (err) {
-                        console.error("Error checking admin_tasks schema:", err.message);
+                        log("Error checking admin_tasks schema:", 'error', null, err, 'error');
                         return;
                     }
                     const columnNames = Array.isArray(columns) ? columns.map(col => col.name) : [];
@@ -457,9 +498,9 @@ async function initializeDatabase() {
                     if (!columnNames.includes("creatorId")) {
                         db.run("ALTER TABLE admin_tasks ADD COLUMN creatorId TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding creatorId column to admin_tasks:", alterErr.message);
+                                log("Error adding creatorId column to admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added creatorId column to admin_tasks.");
+                                log("Added creatorId column to admin_tasks.", 'init');
                             }
                         });
                     }
@@ -468,17 +509,17 @@ async function initializeDatabase() {
                     if (!columnNames.includes("taskDescription")) {
                         db.run("ALTER TABLE admin_tasks ADD COLUMN taskDescription TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding taskDescription column to admin_tasks:", alterErr.message);
+                                log("Error adding taskDescription column to admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added taskDescription column to admin_tasks.");
+                                log("Added taskDescription column to admin_tasks.", 'init');
                             }
                         });
                     } else if (columnNames.includes("task_name") && !columnNames.includes("taskDescription")) {
                         db.run("ALTER TABLE admin_tasks RENAME COLUMN task_name TO taskDescription", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error renaming task_name to taskDescription in admin_tasks:", alterErr.message);
+                                log("Error renaming task_name to taskDescription in admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Renamed task_name to taskDescription in admin_tasks.");
+                                log("Renamed task_name to taskDescription in admin_tasks.", 'init');
                             }
                         });
                     }
@@ -487,17 +528,17 @@ async function initializeDatabase() {
                     if (!columnNames.includes("createdAt")) {
                         db.run("ALTER TABLE admin_tasks ADD COLUMN createdAt INTEGER", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding createdAt column to admin_tasks:", alterErr.message);
+                                log("Error adding createdAt column to admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added createdAt column to admin_tasks.");
+                                log("Added createdAt column to admin_tasks.", 'init');
                             }
                         });
                     } else if (columnNames.includes("created_at") && !columnNames.includes("createdAt")) {
                         db.run("ALTER TABLE admin_tasks RENAME COLUMN created_at TO createdAt", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error renaming created_at to createdAt in admin_tasks:", alterErr.message);
+                                log("Error renaming created_at to createdAt in admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Renamed created_at to createdAt in admin_tasks.");
+                                log("Renamed created_at to createdAt in admin_tasks.", 'init');
                             }
                         });
                     }
@@ -506,14 +547,14 @@ async function initializeDatabase() {
                     if (!columnNames.includes("guildId") && columnNames.includes("guild_id")) {
                         db.run("ALTER TABLE admin_tasks ADD COLUMN guildId TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding guildId to admin_tasks:", alterErr.message);
+                                log("Error adding guildId to admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added guildId column to admin_tasks.");
+                                log("Added guildId column to admin_tasks.", 'init');
                                 db.run("UPDATE admin_tasks SET guildId = guild_id WHERE guildId IS NULL", (updateErr) => {
                                     if (updateErr) {
-                                        console.error("Error copying data from guild_id to guildId:", updateErr.message);
+                                        log("Error copying data from guild_id to guildId:", 'error', null, updateErr, 'error');
                                     } else {
-                                        console.log("Copied data from guild_id to guildId in admin_tasks.");
+                                        log("Copied data from guild_id to guildId in admin_tasks.", 'init');
                                     }
                                 });
                             }
@@ -521,20 +562,20 @@ async function initializeDatabase() {
                     } else if (!columnNames.includes("guild_id") && columnNames.includes("guildId")) {
                          db.run("ALTER TABLE admin_tasks ADD COLUMN guild_id TEXT", (alterErr) => {
                             if (alterErr) {
-                                console.error("Error adding guild_id to admin_tasks:", alterErr.message);
+                                log("Error adding guild_id to admin_tasks:", 'error', null, alterErr, 'error');
                             } else {
-                                console.log("Added guild_id column to admin_tasks.");
+                                log("Added guild_id column to admin_tasks.", 'init');
                                 db.run("UPDATE admin_tasks SET guild_id = guildId WHERE guild_id IS NULL", (updateErr) => {
                                     if (updateErr) {
-                                        console.error("Error copying data from guildId to guild_id:", updateErr.message);
+                                        log("Error copying data from guildId to guild_id:", 'error', null, updateErr, 'error');
                                     } else {
-                                        console.log("Copied data from guildId to guild_id in admin_tasks.");
+                                        log("Copied data from guildId to guild_id in admin_tasks.", 'init');
                                     }
                                 });
                             }
                         });
                     } else if (!columnNames.includes("guild_id") && !columnNames.includes("guildId")) {
-                        console.warn("Neither 'guild_id' nor 'guildId' found in admin_tasks. This indicates a potential issue with initial table creation.");
+                        log("Neither 'guild_id' nor 'guildId' found in admin_tasks. This indicates a potential issue with initial table creation.", 'warn');
                     }
                 });
 
@@ -560,9 +601,9 @@ async function initializeDatabase() {
                     )
                 `, (err) => {
                     if (err) {
-                        console.error('Error creating moderation_actions table:', err.message);
+                        log('Error creating moderation_actions table:', 'error', null, err, 'error');
                     } else {
-                        console.log('Moderation actions table checked/created.');
+                        log('Moderation actions table checked/created.', 'init');
                     }
                 });
 
@@ -582,9 +623,9 @@ async function initializeDatabase() {
                     )
                 `, (err) => {
                     if (err) {
-                        console.error('Error creating reputation table:', err.message);
+                        log('Error creating reputation table:', 'error', null, err, 'error');
                     } else {
-                        console.log('Reputation table checked/created.');
+                        log('Reputation table checked/created.', 'init');
                     }
                 });
 
@@ -604,13 +645,13 @@ async function initializeDatabase() {
                     )
                 `, (err) => {
                     if (err) {
-                        console.error('Error creating mod_cooldowns table:', err.message);
+                        log('Error creating mod_cooldowns table:', 'error', null, err, 'error');
                     } else {
-                        console.log('Mod cooldowns table checked/created.');
+                        log('Mod cooldowns table checked/created.', 'init');
                     }
                 });
 
-                console.log('All database tables checked/created and schema updated.');
+                log('All database tables checked/created and schema updated.', 'init');
                 resolve(db); // Resolve the promise with the database object
             });
         });
