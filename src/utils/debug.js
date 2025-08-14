@@ -4,7 +4,7 @@ import { argv } from 'process';
 
 /**
  * @class DebugConfig
- * @description Manages CLI/env debug config, ANSI colors, log types, and logging.
+ * @description Manages CLI/env debug config, ANSI colors, log types, and logging with security features.
  */
 class DebugConfig {
 	constructor() {
@@ -17,8 +17,15 @@ class DebugConfig {
 		this.showCaller = true;
 		this.outputFile = null;
 		this.debugStream = null;
+		this.sanitizeData = true; // New security feature
+		this.maxDataLength = 1000; // Limit data output length
 
-		// ANSI Colors
+		this.sensitiveKeys = [
+			'token', 'key', 'secret', 'password', 'pass', 'auth', 'api',
+			'credential', 'private', 'id', 'channel', 'guild', 'user',
+			'email', 'phone', 'address', 'ip', 'host', 'url', 'webhook'
+		];
+
 		this.ansiColors = {
 		Reset: "\x1b[0m",
 		Bright: "\x1b[1m",
@@ -77,6 +84,85 @@ class DebugConfig {
 		this.logTypes[typeName] = `${colorCode}[${label || typeName.toUpperCase()}]${this.ansiColors.Reset}`;
 	}
 
+	/**
+	 * Add custom sensitive keys to be redacted from logs
+	 * @param {string[]} keys Array of sensitive key patterns
+	 */
+	addSensitiveKeys(keys) {
+		this.sensitiveKeys.push(...keys);
+	}
+
+	/**
+	 * Sanitize sensitive data from objects before logging
+	 * @param {any} data Data to sanitize
+	 * @returns {any} Sanitized data
+	 */
+	_sanitizeData(data) {
+		if (!this.sanitizeData || data === null || data === undefined) {
+			return data;
+		}
+
+		// Handle different data types
+		if (typeof data === 'string') {
+			// Check if string looks like sensitive data (long alphanumeric, IDs, etc.)
+			if (data.length > 20 && /^[a-zA-Z0-9_-]+$/.test(data)) {
+				return `***REDACTED_ID(${data.length})***`;
+			}
+			return data;
+		}
+
+		if (typeof data === 'number' || typeof data === 'boolean') {
+			return data;
+		}
+
+		if (Array.isArray(data)) {
+			return data.map(item => this._sanitizeData(item));
+		}
+
+		if (typeof data === 'object') {
+			const sanitized = {};
+			for (const [key, value] of Object.entries(data)) {
+				const lowerKey = key.toLowerCase();
+				const isSensitive = this.sensitiveKeys.some(sensitiveKey => 
+					lowerKey.includes(sensitiveKey.toLowerCase())
+				);
+
+				if (isSensitive) {
+					if (typeof value === 'string') {
+						if (value.length <= 4) {
+							sanitized[key] = '***';
+						} else {
+							sanitized[key] = `${value.substring(0, 2)}***${value.slice(-2)}`;
+						}
+					} else {
+						sanitized[key] = '***REDACTED***';
+					}
+				} else {
+					sanitized[key] = this._sanitizeData(value);
+				}
+			}
+			return sanitized;
+		}
+
+		return data;
+	}
+
+	/**
+	 * Limit data output length to prevent log flooding
+	 * @param {any} data Data to limit
+	 * @returns {any} Limited data
+	 */
+	_limitDataLength(data) {
+		const jsonString = JSON.stringify(data, null, 2);
+		if (jsonString.length > this.maxDataLength) {
+			return {
+				...data,
+				'__DEBUG_NOTE__': `Data truncated (${jsonString.length} > ${this.maxDataLength} chars)`
+			};
+		}
+		return data;
+	}
+
 	_parseArgs() {
 		const args = argv.slice(2);
 
@@ -114,6 +200,17 @@ class DebugConfig {
 				this.outputFile = args[++i];
 			}
 			break;
+			case '--debug-no-sanitize':
+			case '-dns':
+			this.sanitizeData = false;
+			console.warn('⚠️  WARNING: Data sanitization disabled. Sensitive data may be logged!');
+			break;
+			case '--debug-max-length':
+			case '-dml':
+			if (args[i + 1] && !args[i + 1].startsWith('-')) {
+				this.maxDataLength = parseInt(args[++i]) || 1000;
+			}
+			break;
 			case '--help-debug':
 			this._showHelp();
 			process.exit(0);
@@ -138,16 +235,24 @@ Debug Options:
 --debug-no-timestamp, -dnt   Don't show timestamps.
 --debug-no-caller, -dnc      Don't show caller info.
 --debug-file, -df <file>     Output debug to a specified file.
+--debug-no-sanitize, -dns    Disable data sanitization (SECURITY RISK).
+--debug-max-length, -dml <n> Maximum data length to log (default: 1000).
 --help-debug                 Show this help message.
+
+Security Features:
+- Automatic sanitization of sensitive data (IDs, tokens, keys, etc.)
+- Data length limiting to prevent log flooding
+- Partial masking of sensitive values for debugging context
 
 Categories: all, init, command, event, client, interaction, scraper (and any custom categories)
 
 Examples:
-node your_script.js --debug                          # Enable all debug logs
+node your_script.js --debug                          # Enable all debug logs (secure)
 node your_script.js -d command                       # Only debug commands
 node your_script.js --debug --debug-level verbose    # Verbose debugging for all categories
 node your_script.js -d command -ds                   # Debug commands with stack traces
 node your_script.js -d --debug-file debug.log        # Debug all to file
+node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT RECOMMENDED)
 		`);
 		process.exit(0);
 	}
@@ -190,15 +295,42 @@ node your_script.js -d --debug-file debug.log        # Debug all to file
 
 		this._outputDebug(debugMsg);
 
+		// Apply security measures to data before logging
 		if (data !== null && (level === 'verbose' || level === 'trace' || this.level !== 'info')) {
-		this._outputDebug(`[DATA]`, data);
+			const sanitizedData = this._sanitizeData(data);
+			const limitedData = this._limitDataLength(sanitizedData);
+			this._outputDebug(`[DATA]`, limitedData);
 		}
 
 		if (error) {
 		this._outputDebug(`[ERROR] ${error.message}`);
 		if (this.showStack || level === 'trace') {
-			this._outputDebug(`[STACK]`, error.stack);
+			// Sanitize stack traces as they might contain file paths or sensitive info
+			const sanitizedStack = this.sanitizeData ? 
+				error.stack.replace(/\/[^\s]+\//g, '/***PATH***/') : 
+				error.stack;
+			this._outputDebug(`[STACK]`, sanitizedStack);
 		}
+		}
+	}
+
+	/**
+	 * Log sensitive data with explicit warning (use sparingly for debugging)
+	 * @param {string} message
+	 * @param {string} category
+	 * @param {any} sensitiveData
+	 * @param {string} level
+	 */
+	logSensitive(message, category = 'general', sensitiveData = null, level = 'trace') {
+		if (!this.enabled) return;
+		
+		console.warn('⚠️  SECURITY WARNING: Logging potentially sensitive data');
+		this.log(`${message} [SENSITIVE DATA FOLLOWS]`, category, null, null, level);
+		
+		if (sensitiveData !== null) {
+			// Force sanitization even if disabled globally
+			const sanitizedData = this._sanitizeData(sensitiveData);
+			this._outputDebug(`[SENSITIVE_DATA]`, sanitizedData);
 		}
 	}
 
@@ -236,7 +368,41 @@ node your_script.js -d --debug-file debug.log        # Debug all to file
 		}
 		return info;
 	}
+
+	/**
+	 * Safely log environment variables (useful for debugging config issues)
+	 * @param {string[]} allowedKeys Array of environment variable keys that are safe to log
+	 */
+	logSafeEnvVars(allowedKeys = []) {
+		if (!this.enabled) return;
+		
+		const safeEnvVars = {};
+		allowedKeys.forEach(key => {
+			if (process.env[key] !== undefined) {
+				const value = process.env[key];
+				if (value.length > 50 || /^[a-zA-Z0-9_-]{20,}$/.test(value)) {
+					safeEnvVars[key] = `${value.substring(0, 4)}***${value.slice(-4)}`;
+				} else {
+					safeEnvVars[key] = value;
+				}
+			}
+		});
+		
+		this.log('Safe environment variables', 'config', safeEnvVars, null, 'verbose');
+	}
+
+	/**
+	 * Clean shutdown - close file streams
+	 */
+	shutdown() {
+		if (this.debugStream) {
+			this.debugStream.end();
+		}
+	}
 }
 
 export const debugConfig = new DebugConfig();
 export const log = debugConfig.log.bind(debugConfig);
+
+process.on('SIGINT', () => debugConfig.shutdown());
+process.on('SIGTERM', () => debugConfig.shutdown());
