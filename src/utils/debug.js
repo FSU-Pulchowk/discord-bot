@@ -295,8 +295,8 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 
 		this._outputDebug(debugMsg);
 
-		// Apply security measures to data before logging
-		if (data !== null && (level === 'verbose' || level === 'trace' || this.level !== 'info')) {
+		// Always sanitize and limit data before logging, regardless of log level
+		if (data !== null) {
 			const sanitizedData = this._sanitizeData(data);
 			const limitedData = this._limitDataLength(sanitizedData);
 			this._outputDebug(`[DATA]`, limitedData);
@@ -344,6 +344,7 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 		if (this.debugStream) this.debugStream.write(sanitizedMessage + '\n');
 		}
 		if (data !== null) {
+		// Data should already be sanitized and limited before being passed here
 		const formattedData = JSON.stringify(data, null, 2);
 		console.log(formattedData);
 		if (this.debugStream) this.debugStream.write(formattedData + '\n');
