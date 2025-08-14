@@ -417,6 +417,13 @@ class PulchowkBot {
 
             // --- Remaining Specific Button Handlers (assuming interaction is now deferred or was handled above) ---
             if (customId.startsWith('verify_start_button_')) {
+                const targetId = customId.replace('verify_start_button_', '');
+                if (interaction.user.id !== targetId) {
+                    return interaction.reply({
+                        content: '❌ This verification button is not for you. Please run `/verify` to start your own verification process.',
+                        ephemeral: true
+                    });
+                }
                 const verifyCmd = this.client.commands.get('verify');
                 if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
                     try {

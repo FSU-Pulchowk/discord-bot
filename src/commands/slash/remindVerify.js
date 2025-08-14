@@ -119,6 +119,12 @@ export async function execute(interaction) {
     const actionRow = new ActionRowBuilder().addComponents(verifyButton);
 
     for (const member of unverifiedMembers.values()) {
+        const verifyButton = new ButtonBuilder()
+            .setCustomId(`verify_start_button_${member.user.id}`)
+            .setLabel('Verify Your Account')
+            .setStyle(ButtonStyle.Primary);
+        const actionRow = new ActionRowBuilder().addComponents(verifyButton);
+
         try {
             await member.send({ embeds: [reminderEmbed], components: [actionRow] });
             sentCount++;
@@ -130,6 +136,7 @@ export async function execute(interaction) {
         }
         await new Promise(resolve => setTimeout(resolve, DM_SEND_DELAY_MS));
     }
+
 
     let replyContent = `✅ Sent **${sentCount}** verification reminders.`;
     if (failedCount > 0) {
