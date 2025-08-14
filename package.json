@@ -8,7 +8,6 @@
     "start": "node ./src/bot.js",
     "start:debug": "node ./src/bot.js --debug",
     "start:debug-help": "node ./src/utils/debug.js --help-debug",
-    "scrape": "node ./scrape.js",
     "deploy-commands-guild": "node deploy-commands.js --guild",
     "deploy-commands-global": "node deploy-commands.js --global"
   },
