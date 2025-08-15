@@ -120,7 +120,7 @@ export async function execute(interaction) {
 
     for (const member of unverifiedMembers.values()) {
         const verifyButton = new ButtonBuilder()
-            .setCustomId(`verify_start_button_${member.user.id}`)
+            .setCustomId(`verify_start_button_${interaction.user.id}`)
             .setLabel('Verify Your Account')
             .setStyle(ButtonStyle.Primary);
         const actionRow = new ActionRowBuilder().addComponents(verifyButton);

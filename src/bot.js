@@ -12,7 +12,7 @@ import {
     AttachmentBuilder,
     Events,
     MessageFlags,
-    ModalBuilder, 
+    ModalBuilder,
     TextInputBuilder,
     TextInputStyle
 } from 'discord.js';
@@ -20,19 +20,19 @@ import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v9';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
-import { initializeDatabase, db } from './database.js'; // Assuming 'db' is exported from database.js
-import { emailService } from './services/emailService.js'; // Assuming emailService exists
-import { scrapeLatestNotice } from './services/scraper.js'; // Assuming scrapeLatestNotice exists
-import { initializeGoogleCalendarClient } from './commands/slash/holidays.js'; // Assuming this exists
-import { fromPath } from 'pdf2pic'; // For PDF to image conversion
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'; // For PDF page count
+import { initializeDatabase, db } from './database.js';
+import { emailService } from './services/emailService.js';
+import { scrapeLatestNotice } from './services/scraper.js';
+import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
+import { fromPath } from 'pdf2pic';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { pollFeeds } from './services/rssService.js';
-import { exit, cwd } from 'process'; 
+import { exit, cwd } from 'process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
@@ -43,10 +43,15 @@ import { debugConfig } from './utils/debug.js';
 dotenv.config();
 
 process.on('unhandledRejection', error => {
-    debugConfig.log('Unhandled promise rejection (this may cause the bot to crash):', 'error', null, error, 'error');
-    console.error(error);
+    debugConfig.log('Unhandled promise rejection:', 'error', null, error, 'error');
+    console.error('Unhandled promise rejection:', error);
 });
 
+process.on('uncaughtException', error => {
+    debugConfig.log('Uncaught exception:', 'error', null, error, 'error');
+    console.error('Uncaught exception:', error);
+    process.exit(1);
+});
 
 /**
  * Writes the Google Service Account Key from an environment variable to a file.
@@ -58,7 +63,7 @@ async function writeServiceAccountKey() {
         debugConfig.log('No GOOGLE_SERVICE_ACCOUNT_KEY_B64 env var found. Google Calendar features might be limited.', 'init', null, null, 'warn');
         return;
     }
-    const keyPath = path.resolve(process.cwd(), 'src', 'service_account_key.json'); // Save in src directory
+    const keyPath = path.resolve(process.cwd(), 'src', 'service_account_key.json');
     try {
         const decoded = Buffer.from(b64, 'base64').toString('utf-8');
         await fsPromises.writeFile(keyPath, decoded);
@@ -69,19 +74,13 @@ async function writeServiceAccountKey() {
 }
 
 /**
- * Main Discord Bot class.
+ * Main Discord Bot class with improved error handling and interaction management.
  */
 class PulchowkBot {
-    /**
-     * @param {string} token The Discord bot token.
-     * @param {import('sqlite3').Database} dbInstance The SQLite database instance.
-     */
     constructor(token, dbInstance) {
         this.token = token;
-        this.db = dbInstance; // Attach the database instance to the client for easy access
-
-        this.debugConfig = debugConfig; // Use the globally instantiated logger
-        // No need for this.debugStream property here anymore, it's managed internally by DebugConfig
+        this.db = dbInstance;
+        this.debugConfig = debugConfig;
         this.debugConfig.log("Bot instance created. Initializing...", 'init');
 
         this.colors = {
@@ -93,39 +92,41 @@ class PulchowkBot {
 
         this.client = new Client({
             intents: [
-                IntentsBitField.Flags.Guilds, // Required for guild-related events (members, channels, roles)
-                IntentsBitField.Flags.GuildMembers, // Required for guild member add/remove, member updates
-                IntentsBitField.Flags.GuildMessages, // Required for message creation, updates, deletions
-                IntentsBitField.Flags.MessageContent, // Required to read message content (for commands, anti-spam)
-                IntentsBitField.Flags.GuildVoiceStates, // Required for voice channel activity tracking
-                IntentsBitField.Flags.DirectMessages, // Required for direct messages to the bot
-                IntentsBitField.Flags.GuildMessageReactions // Required for reaction roles, suggestion voting
+                IntentsBitField.Flags.Guilds,
+                IntentsBitField.Flags.GuildMembers,
+                IntentsBitField.Flags.GuildMessages,
+                IntentsBitField.Flags.MessageContent,
+                IntentsBitField.Flags.GuildVoiceStates,
+                IntentsBitField.Flags.DirectMessages,
+                IntentsBitField.Flags.GuildMessageReactions
             ],
             partials: [
-                Partials.Channel, // Required for DM channels and uncached channels
-                Partials.Message, // Required for uncached messages (e.g., old messages for reactions)
-                Partials.Reaction, // Required for uncached reactions
-                Partials.User, // Required for uncached users
-                Partials.GuildMember // Required for uncached guild members
+                Partials.Channel,
+                Partials.Message,
+                Partials.Reaction,
+                Partials.User,
+                Partials.GuildMember
             ]
         });
 
-        this.client.db = dbInstance; // Attach the database instance to the client for easy access
-        this.client.commands = new Collection(); // Collection to store slash commands
-        this.commandFiles = []; // Array to store command data for registration
-        this.developers = process.env.DEVELOPER_IDS ? process.env.DEVELOPER_IDS.split(',') : []; // Bot developer IDs
+        this.client.db = dbInstance;
+        this.client.commands = new Collection();
+        this.commandFiles = [];
+        this.developers = process.env.DEVELOPER_IDS ? process.env.DEVELOPER_IDS.split(',') : [];
 
-        this.spamMap = new Map(); // For anti-spam tracking
-        this.spamWarnings = new Map(); // For anti-spam warnings
-        this.voiceStates = new Map(); // To track active voice sessions
+        // State management
+        this.spamMap = new Map();
+        this.spamWarnings = new Map();
+        this.voiceStates = new Map();
+        this.rateLimitMap = new Map();
+        this.interactionStates = new Map(); // Track interaction states
 
         this._initializeCommands();
         this._registerEventListeners();
     }
 
     /**
-     * Initializes and loads all slash commands from the commands directory.
-     * Combines logic from both bot.js and index.js
+     * Initializes and loads all slash commands with better error handling.
      * @private
      */
     async _initializeCommands() {
@@ -133,83 +134,102 @@ class PulchowkBot {
         const commandsPath = path.join(__dirname, 'commands', 'slash');
 
         try {
+            if (!fs.existsSync(commandsPath)) {
+                this.debugConfig.log(`Commands directory not found: ${commandsPath}`, 'command', null, null, 'error');
+                return;
+            }
+
             const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
             this.debugConfig.log(`Found ${commandFiles.length} command files`, 'command', { files: commandFiles }, null, 'verbose');
 
-            const importPromises = commandFiles.map(file => {
+            const importPromises = commandFiles.map(async file => {
                 const filePath = path.join(commandsPath, file);
-                return import(`file://${filePath}?v=${Date.now()}`).then(commandModule => {
-                    if (commandModule.data && commandModule.execute) {
-                        this.client.commands.set(commandModule.data.name, commandModule);
-                        this.commandFiles.push(commandModule.data.toJSON());
-                        this.debugConfig.log(`Loaded command: ${commandModule.data.name}`, 'command', null, null, 'verbose');
-                    } else {
-                        this.debugConfig.log(`Invalid command structure in file: ${file}`, 'command', { filePath }, null, 'info');
+                try {
+                    const commandModule = await import(`file://${filePath}`);
+                    
+                    if (!commandModule.data || !commandModule.execute) {
+                        this.debugConfig.log(`Invalid command structure in ${file}: missing data or execute`, 'command', { file }, null, 'warn');
+                        return;
                     }
-                }).catch(error => {
-                    this.debugConfig.log(`Failed to load command from ${filePath}:`, 'command', null, error);
-                 });
+
+                    // Validate command data
+                    if (!commandModule.data.name || typeof commandModule.execute !== 'function') {
+                        this.debugConfig.log(`Invalid command in ${file}: missing name or execute function`, 'command', { file }, null, 'warn');
+                        return;
+                    }
+
+                    this.client.commands.set(commandModule.data.name, commandModule);
+                    this.commandFiles.push(commandModule.data.toJSON());
+                    this.debugConfig.log(`Successfully loaded command: ${commandModule.data.name}`, 'command', null, null, 'verbose');
+                    
+                } catch (error) {
+                    this.debugConfig.log(`Failed to load command from ${file}:`, 'command', { file }, error, 'error');
+                }
             });
 
-            await Promise.all(importPromises);
+            await Promise.allSettled(importPromises);
             this.debugConfig.log(`Successfully loaded ${this.client.commands.size} commands.`, 'command');
         } catch (error) {
-            this.debugConfig.log('Error reading commands directory:', 'command', null, error);
+            this.debugConfig.log('Error during command initialization:', 'command', null, error, 'error');
         }
     }
 
     /**
-     * Registers all Discord.js event listeners.
+     * Registers all Discord.js event listeners with improved error handling.
      * @private
      */
     _registerEventListeners() {
         this.debugConfig.log('Registering event listeners...', 'event');
-        // Client ready event: fires once when the bot successfully logs in
+        
         this.client.once(Events.ClientReady, async c => {
             this.debugConfig.log(`Bot is ready! Logged in as ${c.user.tag}`, 'client', { userId: c.user.id });
-            c.user.setActivity('for new RSS feeds', { type: 'WATCHING' }); // Set bot's activity
-            this._scheduleJobs(); // Start all recurring jobs
-            await this._registerSlashCommands(); // Register slash commands with Discord API
-            initializeGoogleCalendarClient(); // Initialize Google Calendar client
-            this._loadActiveVoiceSessions(); // Load any active voice sessions from DB
+            c.user.setActivity('for new RSS feeds', { type: 'WATCHING' });
+            
+            try {
+                await this._registerSlashCommands();
+                this._scheduleJobs();
+                await this._loadActiveVoiceSessions();
+                initializeGoogleCalendarClient();
+                this.debugConfig.log('Bot initialization completed successfully', 'client', null, null, 'success');
+            } catch (error) {
+                this.debugConfig.log('Error during bot initialization:', 'client', null, error, 'error');
+            }
         });
 
-        // Interaction Create event: handles all interactions (slash commands, buttons, modals, etc.)
-        this.client.on(Events.InteractionCreate, this._onInteractionCreate.bind(this));
-        // Voice State Update event: tracks users joining/leaving/moving voice channels
-        this.client.on(Events.VoiceStateUpdate, this._onVoiceStateUpdate.bind(this));
-        // Message Create event: handles new messages (for anti-spam, message stats)
-        this.client.on(Events.MessageCreate, this._onMessageCreate.bind(this));
-        // Guild Member Add event: handles new members joining a guild
-        this.client.on(Events.GuildMemberAdd, this._onGuildMemberAdd.bind(this));
-        // Guild Member Remove event: handles members leaving a guild
-        this.client.on(Events.GuildMemberRemove, this._onGuildMemberRemove.bind(this));
-        // Message Reaction Add event: handles users adding reactions to messages
-        this.client.on(Events.MessageReactionAdd, this._onMessageReactionAdd.bind(this));
-        // Message Reaction Remove event: handles users removing reactions from messages
-        this.client.on(Events.MessageReactionRemove, this._onMessageReactionRemove.bind(this));
+        // Core event handlers with error wrapping
+        this.client.on(Events.InteractionCreate, this._safeEventHandler('InteractionCreate', this._onInteractionCreate.bind(this)));
+        this.client.on(Events.VoiceStateUpdate, this._safeEventHandler('VoiceStateUpdate', this._onVoiceStateUpdate.bind(this)));
+        this.client.on(Events.MessageCreate, this._safeEventHandler('MessageCreate', this._onMessageCreate.bind(this)));
+        this.client.on(Events.GuildMemberAdd, this._safeEventHandler('GuildMemberAdd', this._onGuildMemberAdd.bind(this)));
+        this.client.on(Events.GuildMemberRemove, this._safeEventHandler('GuildMemberRemove', this._onGuildMemberRemove.bind(this)));
+        this.client.on(Events.MessageReactionAdd, this._safeEventHandler('MessageReactionAdd', this._onMessageReactionAdd.bind(this)));
+        this.client.on(Events.MessageReactionRemove, this._safeEventHandler('MessageReactionRemove', this._onMessageReactionRemove.bind(this)));
 
-        // Discord.js Client Error event: for general client errors
-        this.client.on(Events.Error, error => {
-            this.debugConfig.log('Discord.js Client Error:', 'client', null, error, 'error');
-        });
-        // Shard Disconnect event: for when a shard disconnects
-        this.client.on(Events.ShardDisconnect, (event, id) => {
-            this.debugConfig.log(`Discord.js Shard ${id} Disconnected:`, 'client', { event }, null, 'warn');
-        });
-        // Shard Reconnecting event: for when a shard attempts to reconnect
-        this.client.on(Events.ShardReconnecting, (id) => {
-            this.debugConfig.log(`Discord.js Shard ${id} Reconnecting...`, 'client', null, null, 'info');
-        });
-        // Discord.js Client Warning event: for non-critical warnings
-        this.client.on(Events.Warn, info => {
-            this.debugConfig.log('Discord.js Client Warning:', 'client', { info }, null, 'warn');
-        });
-        this.debugConfig.log('Event listeners registered.', 'event');
+        // Error handling
+        this.client.on(Events.Error, error => this.debugConfig.log('Discord.js Client Error:', 'client', null, error, 'error'));
+        this.client.on(Events.ShardDisconnect, (event, id) => this.debugConfig.log(`Shard ${id} Disconnected:`, 'client', { event }, null, 'warn'));
+        this.client.on(Events.ShardReconnecting, (id) => this.debugConfig.log(`Shard ${id} Reconnecting...`, 'client', null, null, 'info'));
+        this.client.on(Events.Warn, info => this.debugConfig.log('Discord.js Warning:', 'client', { info }, null, 'warn'));
+
+        this.debugConfig.log('Event listeners registered successfully.', 'event');
     }
 
     /**
-     * Registers slash commands with the Discord API.
+     * Wraps event handlers with error handling to prevent crashes.
+     * @private
+     */
+    _safeEventHandler(eventName, handler) {
+        return async (...args) => {
+            try {
+                await handler(...args);
+            } catch (error) {
+                this.debugConfig.log(`Error in ${eventName} handler:`, 'event', { eventName }, error, 'error');
+            }
+        };
+    }
+
+    /**
+     * Registers slash commands with Discord API.
      * @private
      */
     async _registerSlashCommands() {
@@ -217,7 +237,12 @@ class PulchowkBot {
         const clientId = process.env.CLIENT_ID;
 
         if (!token || !clientId) {
-            this.debugConfig.log('BOT_TOKEN or CLIENT_ID missing from environment. Cannot register commands.', 'init', null, new Error('Missing credentials'), 'error');
+            this.debugConfig.log('BOT_TOKEN or CLIENT_ID missing. Cannot register commands.', 'init', null, new Error('Missing credentials'), 'error');
+            return;
+        }
+
+        if (this.commandFiles.length === 0) {
+            this.debugConfig.log('No commands to register.', 'command', null, null, 'warn');
             return;
         }
 
@@ -226,9 +251,8 @@ class PulchowkBot {
 
         try {
             const data = await rest.put(
-                Routes.applicationCommands(clientId), {
-                    body: this.commandFiles
-                },
+                Routes.applicationCommands(clientId),
+                { body: this.commandFiles }
             );
             this.debugConfig.log(`Successfully reloaded ${data.length} application (/) commands globally.`, 'command');
         } catch (error) {
@@ -237,16 +261,17 @@ class PulchowkBot {
     }
 
     /**
-     * Loads active voice sessions from the database on bot startup.
+     * Loads active voice sessions from database on startup.
      * @private
      */
     async _loadActiveVoiceSessions() {
         return new Promise((resolve, reject) => {
             this.client.db.all(`SELECT user_id, guild_id, channel_id, join_time FROM active_voice_sessions`, [], (err, rows) => {
                 if (err) {
-                    this.debugConfig.log('Error loading active voice sessions from DB:', 'client', null, err, 'error');
+                    this.debugConfig.log('Error loading active voice sessions:', 'client', null, err, 'error');
                     return reject(err);
                 }
+                
                 rows.forEach(row => {
                     this.voiceStates.set(row.user_id, {
                         guildId: row.guild_id,
@@ -254,305 +279,641 @@ class PulchowkBot {
                         joinTime: row.join_time
                     });
                 });
-                this.debugConfig.log(`Loaded ${rows.length} active voice sessions from database.`, 'client', { count: rows.length }, null, 'info');
+                
+                this.debugConfig.log(`Loaded ${rows.length} active voice sessions.`, 'client', { count: rows.length });
                 resolve();
             });
         });
     }
 
-    /**
-     * Schedules all recurring jobs for the bot (RSS polling, notices, birthdays, etc.).
-     * @private
-     */
-    _scheduleJobs() {
-        // Daily Birthday Announcement Schedule (at 12:00 AM)
-        schedule.scheduleJob('0 0 * * *', async () => {
-            this.debugConfig.log('Running daily birthday announcement...', 'scheduler', null, null, 'info');
-            await this._announceBirthdays();
-        });
-        this.debugConfig.log('Scheduled daily birthday announcements for 12 AM.', 'scheduler', null, null, 'info');
-
-        const RSS_POLL_INTERVAL_MINUTES = parseInt(process.env.RSS_POLL_INTERVAL_MINUTES || '5');
-        if (RSS_POLL_INTERVAL_MINUTES > 0) {
-            this.debugConfig.log(`Initializing RSS feed polling. Interval: ${RSS_POLL_INTERVAL_MINUTES} minutes.`, 'scheduler', null, null, 'info');
-            schedule.scheduleJob(`*/${RSS_POLL_INTERVAL_MINUTES} * * * *`, async () => {
-                this.debugConfig.log('Running RSS feed poll...', 'scheduler', null, null, 'info');
-                await pollFeeds(this.client);
-            });
-            this.debugConfig.log(`Scheduled RSS feed polling every ${RSS_POLL_INTERVAL_MINUTES} minutes.`, 'scheduler', null, null, 'info');
-        } else {
-            this.debugConfig.log('RSS_POLL_INTERVAL_MINUTES is not set or invalid. RSS polling disabled.', 'scheduler', null, null, 'warn');
-        }
-
-        // Notice Scraping and Announcement Schedule
-        const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000'); // Default to 30 minutes (1800000 ms)
-        if (NOTICE_CHECK_INTERVAL_MS > 0) {
-            this.debugConfig.log(`Initializing notice checking. Interval: ${NOTICE_CHECK_INTERVAL_MS / 1000} seconds.`, 'scheduler', null, null, 'info');
-            this._checkAndAnnounceNotices(); // Initial call on startup
-            setInterval(() => this._checkAndAnnounceNotices(), NOTICE_CHECK_INTERVAL_MS); // Recurring interval
-            this.debugConfig.log(`Scheduled notice checking every ${NOTICE_CHECK_INTERVAL_MS / 60000} minutes.`, 'scheduler', null, null, 'info');
-        } else {
-            this.debugConfig.log('NOTICE_CHECK_INTERVAL_MS is not set or invalid. Notice scraping disabled.', 'scheduler', null, null, 'warn');
-        }
-        this.debugConfig.log('All scheduled jobs set up.', 'scheduler', null, null, 'info');
-    }
+    // ===================================================================================
+    // == IMPROVED INTERACTION HANDLING ==================================================
+    // ===================================================================================
 
     /**
-     * Handles all incoming Discord interactions (slash commands, buttons, modals, etc.).
-     * @param {import('discord.js').Interaction} interaction The interaction object.
-     * @private
+     * Enhanced interaction handler with comprehensive error handling.
      */
     async _onInteractionCreate(interaction) {
-        this.debugConfig.log(`Received interaction`, 'interaction', {
+        const startTime = Date.now();
+        const interactionKey = `${interaction.id}`;
+        
+        if (this.interactionStates.has(interactionKey)) {
+            this.debugConfig.log('Duplicate interaction detected, skipping', 'interaction', { id: interaction.id }, null, 'warn');
+            return;
+        }
+        this.interactionStates.set(interactionKey, { startTime, handled: false });
+
+        const interactionContext = {
             type: interaction.type,
             id: interaction.id,
-            user: interaction.user.tag
-        }, null, 'trace');
+            user: interaction.user.tag,
+            guild: interaction.guild?.id || 'DM',
+            command: interaction.commandName || interaction.customId
+        };
 
-        // --- Handle Chat Input Commands ---
-        if (interaction.isChatInputCommand()) {
-            const command = this.client.commands.get(interaction.commandName);
+        this.debugConfig.log(`Processing interaction`, 'interaction', interactionContext, null, 'trace');
 
-            if (!command) {
-                this.debugConfig.log(`Received interaction for unknown slash command: ${interaction.commandName}`, 'command', { user: interaction.user.tag }, null, 'warn');
-                await interaction.reply({
-                    content: '❌ Unknown command. It might have been removed or is not deployed correctly.',
-                    flags: [MessageFlags.Ephemeral]
-                }).catch(e => this.debugConfig.log("Error replying to unknown command:", 'interaction', null, e, 'error'));
-                return;
-            }
+        try {
+            this.interactionStates.get(interactionKey).handled = true;
 
-            try {
-                await command.execute(interaction);
-            } catch (error) {
-                this.debugConfig.log(`Error executing slash command ${interaction.commandName}:`, 'command', { user: interaction.user.tag }, error, 'error');
-                if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({
-                        content: '❌ There was an error while executing this command!',
-                        flags: [MessageFlags.Ephemeral]
-                    }).catch(e => this.debugConfig.log("Error sending error follow-up:", 'interaction', null, e, 'error'));
-                } else {
-                    await interaction.reply({
-                        content: '❌ There was an error while executing this command!',
-                        flags: [MessageFlags.Ephemeral]
-                    }).catch(e => this.debugConfig.log("Error sending error reply:", 'interaction', null, e, 'error'));
-                }
-            }
-        }
-        // --- Handle Button Interactions ---
-        else if (interaction.isButton()) {
-            const customId = interaction.customId;
-            this.debugConfig.log(`Received button interaction: ${customId}`, 'interaction', { user: interaction.user.tag }, null, 'verbose');
-
-            // --- Specific Button Handlers (that might or might not defer/reply themselves) ---
-            if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
-                // These are usually handled by collectors or specific commands.
-                // For a merged bot, ensure the logic exists or route it.
-                // Assuming `_handleSuggestionVote` might eventually handle `confirm_suggestion` via a vote.
-                // For now, defer and return.
-                if (!interaction.replied && !interaction.deferred) {
-                    await interaction.deferUpdate().catch(e => console.error("Error deferring confirm/cancel suggestion button:", e));
-                }
-                return;
-            } else if (customId.startsWith('gotverified_')) {
-                if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-                    return interaction.reply({
-                        content: '❌ You do not have permission to view this list.',
-                        ephemeral: true
-                    }).catch(e => console.error("Error replying to gotverified permission error:", e));
-                }
-                await interaction.deferUpdate().catch(e => console.error("Error deferring gotverified button:", e));
-                const parts = customId.split('_');
-                const action = parts[1];
-                let currentPage = parseInt(parts[2], 10);
-                const originalUserId = parts[3];
-                if (interaction.user.id !== originalUserId) {
-                    return interaction.followUp({
-                        content: '❌ You cannot control someone else’s verification list.',
-                        ephemeral: true
-                    }).catch(() => {});
-                }
-                interaction.client.db.all(
-                    `SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
-                    [interaction.guild.id],
-                    async (err, allRows) => {
-                        if (err || !allRows) {
-                            this.debugConfig.log('Error retrieving user list for gotverified button:', 'interaction', null, err, 'error');
-                            return interaction.editReply({
-                                content: '❌ Could not retrieve user list to change pages.',
-                                components: []
-                            }).catch(e => console.error("Error editing reply for gotverified DB error:", e));
-                        }
-                        if (action === 'next') currentPage++;
-                        if (action === 'prev') currentPage--;
-                        try {
-                            const { renderGotVerifiedPage } = await import('./commands/slash/gotVerified.js');
-                            const pageData = await renderGotVerifiedPage(interaction, allRows, currentPage, originalUserId);
-                            await interaction.editReply(pageData).catch(e => console.error("Error editing reply for gotverified page:", e));
-                        } catch (importError) {
-                            this.debugConfig.log('Error rendering verified users page for gotverified button:', 'interaction', null, importError, 'error');
-                            return interaction.editReply({
-                                content: '❌ Error updating the verified users list.',
-                                components: []
-                            }).catch(e => console.error("Error editing reply for gotverified render error:", e));
-                        }
-                    }
-                );
-                return;
-            }
-
-            // --- General Deferral for other buttons if not already replied/deferred ---
-            // This acts as a catch-all for buttons that might take longer to process,
-            // ensuring the "Bot is thinking..." message appears.
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }).catch(e => {
-                    if (e.code === 10062) { // Discord API Error: Unknown Interaction
-                        this.debugConfig.log(`❗ Interaction ${customId} expired before deferring.`, 'interaction', null, null, 'warn');
-                    } else {
-                        this.debugConfig.log("Error deferring button interaction:", 'interaction', null, e, 'error');
-                    }
-                    return; // Important: Return if deferring failed or expired, to prevent further actions on an invalid interaction
-                });
-            }
-
-            // --- Remaining Specific Button Handlers (assuming interaction is now deferred or was handled above) ---
-            if (customId.startsWith('verify_start_button_')) {
-                const targetId = customId.replace('verify_start_button_', '');
-                if (interaction.user.id !== targetId) {
-                    return interaction.reply({
-                        content: '❌ This verification button is not for you. Please run `/verify` to start your own verification process.',
-                        ephemeral: true
-                    });
-                }
-                const verifyCmd = this.client.commands.get('verify');
-                if (verifyCmd && typeof verifyCmd.handleButtonInteraction === 'function') {
-                    try {
-                        await verifyCmd.handleButtonInteraction(interaction);
-                    } catch (error) {
-                        this.debugConfig.log(`Error handling verify_start_button interaction:`, 'interaction', null, error, 'error');
-                        await interaction.editReply({ content: '❌ An error occurred with the verification button. Please try the `/verify` command directly.' }).catch(e => console.error("Error editing reply for verify button error:", e));
-                    }
-                } else {
-                    this.debugConfig.log(`verify command not found or handleButtonInteraction function missing for button interaction.`, 'interaction', null, null, 'warn');
-                    await interaction.editReply({ content: '❌ The verification command is misconfigured. Please contact an administrator.' }).catch(e => console.error("Error editing reply for misconfigured verify command:", e));
-                }
-                return;
-            } else if (customId.startsWith('confirm_otp_button_')) {
-                const confirmOtpCmd = this.client.commands.get('confirmotp');
-                if (confirmOtpCmd && typeof confirmOtpCmd.handleButtonInteraction === 'function') {
-                    try {
-                        await confirmOtpCmd.handleButtonInteraction(interaction);
-                    } catch (error) {
-                        this.debugConfig.log(`Error handling confirm_otp_button interaction:`, 'interaction', null, error, 'error');
-                        await interaction.editReply({ content: '❌ An error occurred with the OTP confirmation button. Please try the `/confirmotp` command directly.' }).catch(e => console.error("Error editing reply for confirmotp button error:", e));
-                    }
-                } else {
-                    this.debugConfig.log(`confirmotp command not found or handleButtonInteraction function missing for button interaction.`, 'interaction', null, null, 'warn');
-                    await interaction.editReply({ content: '❌ The OTP confirmation command is misconfigured. Please contact an administrator.' }).catch(e => console.error("Error editing reply for misconfigured confirmotp command:", e));
-                }
-                return;
-            } else if (customId.startsWith('confirm_setup_fsu_') || customId.startsWith('cancel_setup_fsu_')) {
-                const setupFSUCommand = this.client.commands.get('setupfsu');
-                if (setupFSUCommand && typeof setupFSUCommand._performSetupLogic === 'function') {
-                    if (customId.startsWith('confirm_setup_fsu_')) {
-                        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                            return interaction.editReply({ content: 'You do not have permission to confirm this action.' }).catch(e => console.error("Error editing reply for FSU setup permission error:", e));
-                        }
-                        await interaction.editReply({ content: '🔧 Beginning FSU server setup... This may take a moment.', components: [], embeds: [] }).catch(e => console.error("Error editing reply for FSU setup initiation:", e));
-                        await setupFSUCommand._performSetupLogic(interaction);
-                    } else if (customId.startsWith('cancel_setup_fsu_')) {
-                        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                            return interaction.editReply({ content: 'You do not have permission to cancel this action.' }).catch(e => console.error("Error editing reply for FSU cancel permission error:", e));
-                        }
-                        await interaction.editReply({ content: '❌ FSU server setup cancelled.', components: [], embeds: [] }).catch(e => console.error("Error editing reply for FSU setup cancellation:", e));
-                    }
-                } else {
-                    this.debugConfig.log(`Setup command not found or is misconfigured for FSU setup button.`, 'interaction', null, null, 'warn');
-                    await interaction.editReply({ content: '❌ Setup command not found or is misconfigured.' }).catch(e => console.error("Error editing reply for misconfigured FSU setup command:", e));
-                }
-                return;
-            } else if (customId.startsWith('suggest_vote_')) {
-                await this._handleSuggestionVote(interaction);
-                return;
-            } else if (customId.startsWith('delete_suggestion_')) {
-                await this._handleSuggestionDelete(interaction);
-                return;
-            }
-
-            await interaction.editReply({ content: '❌ Unknown button interaction.' }).catch(e => this.debugConfig.log("Error editing reply for unknown button:", 'interaction', null, e, 'error'));
-        }
-        // --- Handle Modal Submissions ---
-        else if (interaction.isModalSubmit()) {
-            this.debugConfig.log(`Received modal submission: ${interaction.customId}`, 'interaction', { user: interaction.user.tag }, null, 'verbose');
-
-            if (interaction.customId === 'verifyModal') {
-                const verifyCmd = this.client.commands.get('verify');
-                if (verifyCmd && typeof verifyCmd.handleModalSubmit === 'function') {
-                    try {
-                        await verifyCmd.handleModalSubmit(interaction);
-                    } catch (error) {
-                        this.debugConfig.log(`Error handling verifyModal submission:`, 'interaction', null, error, 'error');
-                        if (!interaction.replied && !interaction.deferred) {
-                            await interaction.reply({ content: '❌ An error occurred with the verification process.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to modal error:", e));
-                        } else {
-                            await interaction.followUp({ content: '❌ An error occurred with the verification process.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error following up to modal error:", e));
-                        }
-                    }
-                } else {
-                    this.debugConfig.log('Verify command not found or handleModalSubmit function missing for verifyModal.', 'interaction', null, null, 'warn');
-                    if (!interaction.replied && !interaction.deferred) {
-                        await interaction.reply({ content: '❌ An error occurred with the verification process.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured modal:", e));
-                    } else {
-                        await interaction.followUp({ content: '❌ An error occurred with the verification process.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error following up to misconfigured modal:", e));
-                    }
-                }
-                return;
-            } else if (interaction.customId === 'confirmOtpModal') {
-                const confirmOtpCmd = this.client.commands.get('confirmotp');
-                if (confirmOtpCmd && typeof confirmOtpCmd.handleModalSubmit === 'function') {
-                    try {
-                        await confirmOtpCmd.handleModalSubmit(interaction);
-                    } catch (error) {
-                        this.debugConfig.log(`Error handling confirmOtpModal submission:`, 'interaction', null, error, 'error');
-                        if (!interaction.replied && !interaction.deferred) {
-                            await interaction.reply({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to modal error:", e));
-                        } else {
-                            await interaction.followUp({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error following up to modal error:", e));
-                        }
-                    }
-                } else {
-                    this.debugConfig.log('ConfirmOTP command not found or handleModalSubmit function missing for confirmOtpModal.', 'interaction', null, null, 'warn');
-                    if (!interaction.replied && !interaction.deferred) {
-                        await interaction.reply({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to misconfigured modal:", e));
-                    } else {
-                        await interaction.followUp({ content: '❌ An error occurred with the OTP confirmation.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error following up to misconfigured modal:", e));
-                    }
-                }
-                return;
-            } else if (interaction.customId.startsWith('deny_reason_modal_')) {
-                const suggestionId = interaction.customId.split('_')[3];
-                const reason = interaction.fields.getTextInputValue('denyReasonInput');
-                await this._processSuggestionDenial(interaction, suggestionId, reason);
-                return;
-            } else if (interaction.customId.startsWith('delete_reason_modal_')) {
-                const suggestionId = interaction.customId.split('_')[3];
-                const reason = interaction.fields.getTextInputValue('deleteReasonInput');
-                await this._processSuggestionDelete(interaction, suggestionId, reason);
-                return;
-            }
-
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: '❌ Unknown modal submission.', flags: [MessageFlags.Ephemeral] }).catch(e => this.debugConfig.log("Error replying to unknown modal:", 'interaction', null, e, 'error'));
+            if (interaction.isChatInputCommand()) {
+                await this._handleSlashCommand(interaction);
+            } else if (interaction.isButton()) {
+                await this._handleButtonInteraction(interaction);
+            } else if (interaction.isModalSubmit()) {
+                await this._handleModalSubmit(interaction);
             } else {
-                await interaction.followUp({ content: '❌ Unknown modal submission.', flags: [MessageFlags.Ephemeral] }).catch(e => this.debugConfig.log("Error following up to unknown modal:", 'interaction', null, e, 'error'));
+                await this._handleUnknownInteraction(interaction);
+            }
+
+            const duration = Date.now() - startTime;
+            this.debugConfig.log(
+                `Interaction completed in ${duration}ms`,
+                'interaction',
+                { ...interactionContext, duration },
+                null,
+                'debug'
+            );
+
+        } catch (error) {
+            await this._handleInteractionError(interaction, error, { ...interactionContext, startTime });
+        } finally {
+            setTimeout(() => {
+                this.interactionStates.delete(interactionKey);
+            }, 30000);
+        }
+    }
+
+    /**
+     * Improved slash command handler with better validation.
+     * @private
+     */
+    async _handleSlashCommand(interaction) {
+        const command = this.client.commands.get(interaction.commandName);
+        if (!command) {
+            this.debugConfig.log(`Command not found: ${interaction.commandName}`, 'command', { user: interaction.user.tag }, null, 'warn');
+            await this._safeReply(interaction, {
+                content: '⚠️ Command not found. It might have been removed or is not properly deployed.',
+                flags: MessageFlags.Ephemeral
+            });
+            return;
+        }
+        if (typeof command.execute !== 'function') {
+            this.debugConfig.log(`Command ${interaction.commandName} missing execute function`, 'command', { user: interaction.user.tag }, null, 'error');
+            await this._safeReply(interaction, {
+                content: '⚠️ This command is misconfigured. Please contact an administrator.',
+                flags: MessageFlags.Ephemeral
+            });
+            return;
+        }
+        if (this._isRateLimited(interaction.user.id, `command:${interaction.commandName}`)) {
+            await this._safeReply(interaction, {
+                content: '⏱️ You\'re using commands too quickly. Please wait a moment.',
+                flags: MessageFlags.Ephemeral
+            });
+            return;
+        }
+        try {
+            await command.execute(interaction);
+        } catch (error) {
+            this.debugConfig.log(`Error in command ${interaction.commandName}`, 'command', { user: interaction.user.tag }, error, 'error');
+            if (!interaction.replied && !interaction.deferred) {
+                await this._safeErrorReply(interaction, '⚠️ An error occurred while executing this command.');
             }
         }
     }
 
     /**
-     * Handles voice state updates (user joining/leaving/moving channels).
-     * @param {import('discord.js').VoiceState} oldState The old voice state.
-     * @param {import('discord.js').VoiceState} newState The new voice state.
+     * Enhanced button interaction handler.
+     * @private
+     */
+    async _handleButtonInteraction(interaction) {
+        const customId = interaction.customId;
+        this.debugConfig.log(`Button interaction: ${customId}`, 'interaction', { user: interaction.user.tag }, null, 'verbose');
+        try {
+            if (await this._handleSuggestionButtons(interaction)) return;
+            if (await this._handleVerificationButtons(interaction)) return;
+            if (await this._handleGotVerifiedButtons(interaction)) return;
+            if (await this._handleSetupButtons(interaction)) return;
+            await this._ensureDeferred(interaction);
+            await interaction.editReply({
+                content: '⚠️ This button interaction is no longer available or has expired.',
+                components: []
+            });
+        } catch (error) {
+            this.debugConfig.log(`Error in button handler: ${customId}`, 'interaction', { user: interaction.user.tag }, error, 'error');
+            await this._safeErrorReply(interaction, '⚠️ An error occurred while processing this button.');
+        }
+    }
+
+    /**
+     * Handles verification-related buttons with improved error handling.
+     * @private
+     */
+    async _handleVerificationButtons(interaction) {
+        const customId = interaction.customId;
+        if (customId.startsWith('verify_start_button_')) {
+            return await this._handleVerifyStartButton(interaction);
+        }
+        if (customId.startsWith('confirm_otp_button_')) {
+            return await this._handleConfirmOtpButton(interaction);
+        }
+        return false;
+    }
+
+    /**
+     * Improved verify start button handler.
+     * @private
+     */
+    async _handleVerifyStartButton(interaction) {
+        const targetId = interaction.customId.replace('verify_start_button_', '');
+        if (interaction.user.id !== targetId) {
+            await this._safeReply(interaction, {
+                content: '⚠️ This verification button is not for you. Please run `/verify` to start your own verification.',
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        if (this._isRateLimited(interaction.user.id, 'verify_attempt', 3, 300000)) {
+            await this._safeReply(interaction, {
+                content: '⏱️ Too many verification attempts. Please wait 5 minutes before trying again.',
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        const verifyCmd = this.client.commands.get('verify');
+        if (!verifyCmd) {
+            await this._safeReply(interaction, {
+                content: '⚠️ Verification command not available. Please contact an administrator.',
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        if (typeof verifyCmd.handleButtonInteraction !== 'function') {
+            await this._safeReply(interaction, {
+                content: '⚠️ Please use the `/verify` command directly.',
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+        try {
+            await verifyCmd.handleButtonInteraction(interaction);
+        } catch (error) {
+            this.debugConfig.log('Error in verify button handler', 'interaction', { user: interaction.user.tag }, error, 'error');
+            throw error;
+        }
+        return true;
+    }
+
+    /**
+     * Handles confirm OTP button interactions.
+     * @private
+     */
+    async _handleConfirmOtpButton(interaction) {
+        const confirmOtpCmd = this.client.commands.get('confirmotp');
+        if (!confirmOtpCmd || typeof confirmOtpCmd.handleButtonInteraction !== 'function') {
+            await this._safeReply(interaction, {
+                content: '⚠️ Please use the `/confirmotp` command directly.',
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+
+        try {
+            await confirmOtpCmd.handleButtonInteraction(interaction);
+        } catch (error) {
+            this.debugConfig.log('Error in confirmOTP button handler', 'interaction', { user: interaction.user.tag }, error, 'error');
+            if (!interaction.replied && !interaction.deferred) {
+                await this._safeErrorReply(interaction, '⚠️ An error occurred with OTP confirmation.');
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Handles suggestion-related buttons.
+     * @private
+     */
+    async _handleSuggestionButtons(interaction) {
+        const customId = interaction.customId;
+        
+        if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
+            await this._ensureDeferred(interaction, true);
+            return true;
+        }
+        if (customId.startsWith('suggest_vote_')) {
+            await this._handleSuggestionVote(interaction);
+            return true;
+        }
+        if (customId.startsWith('delete_suggestion_')) {
+            await this._handleSuggestionDelete(interaction);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Handles gotverified pagination buttons.
+     * @private
+     */
+    async _handleGotVerifiedButtons(interaction) {
+        const customId = interaction.customId;
+        if (!customId.startsWith('gotverified_')) return false;
+
+        if (!interaction.member?.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+            await this._safeReply(interaction, {
+                content: '⚠️ You do not have permission to view this list.',
+                flags: MessageFlags.Ephemeral
+            });
+            return true;
+        }
+
+        await this._ensureDeferred(interaction, true);
+
+        const parts = customId.split('_');
+        const action = parts[1];
+        let currentPage = parseInt(parts[2], 10);
+        const originalUserId = parts[3];
+
+        if (interaction.user.id !== originalUserId) {
+            await interaction.editReply({
+                content: '⚠️ You cannot control someone else\'s verification list.'
+            });
+            return true;
+        }
+
+        try {
+            const allRows = await this._getVerifiedUsers(interaction.guild.id);
+            if (action === 'next') currentPage++;
+            if (action === 'prev') currentPage--;
+
+            const { renderGotVerifiedPage } = await import('./commands/slash/gotVerified.js');
+            const pageData = await renderGotVerifiedPage(interaction, allRows, currentPage, originalUserId);
+            await interaction.editReply(pageData);
+        } catch (error) {
+            this.debugConfig.log('Error in gotverified pagination', 'interaction', { customId }, error, 'error');
+            await interaction.editReply({
+                content: '⚠️ Could not update the verified users list.',
+                components: []
+            });
+        }
+        return true;
+    }
+
+    /**
+     * Handles setup buttons.
+     * @private
+     */
+    async _handleSetupButtons(interaction) {
+        const customId = interaction.customId;
+        if (!customId.startsWith('confirm_setup_fsu_') && !customId.startsWith('cancel_setup_fsu_')) {
+            return false;
+        }
+
+        if (!interaction.member?.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            await this._safeErrorReply(interaction, 'You do not have permission to perform this action.');
+            return true;
+        }
+
+        const setupFSUCommand = this.client.commands.get('setupfsu');
+        if (!setupFSUCommand || typeof setupFSUCommand._performSetupLogic !== 'function') {
+            await this._safeErrorReply(interaction, '⚠️ Setup command is not available.');
+            return true;
+        }
+
+        try {
+            if (customId.startsWith('confirm_setup_fsu_')) {
+                await interaction.update({
+                    content: '🔧 Beginning FSU server setup...',
+                    components: [],
+                    embeds: []
+                });
+                await setupFSUCommand._performSetupLogic(interaction);
+            } else {
+                await interaction.update({
+                    content: '❌ FSU server setup cancelled.',
+                    components: [],
+                    embeds: []
+                });
+            }
+        } catch (error) {
+            this.debugConfig.log('Error in FSU setup button', 'interaction', { customId }, error, 'error');
+            await this._safeErrorReply(interaction, '⚠️ An error occurred during setup.');
+        }
+        return true;
+    }
+
+    /**
+     * Enhanced modal submit handler.
+     * @private
+     */
+    async _handleModalSubmit(interaction) {
+        const customId = interaction.customId;
+        this.debugConfig.log(`Modal submission: ${customId}`, 'interaction', { user: interaction.user.tag }, null, 'verbose');
+
+        try {
+            if (await this._handleVerificationModals(interaction)) return;
+            if (await this._handleSuggestionModals(interaction)) return;
+
+            await this._safeReply(interaction, {
+                content: '⚠️ This form submission is no longer valid.',
+                flags: MessageFlags.Ephemeral
+            });
+
+        } catch (error) {
+            this.debugConfig.log(`Error in modal handler: ${customId}`, 'interaction', { user: interaction.user.tag }, error, 'error');
+            await this._safeErrorReply(interaction, '⚠️ An error occurred while processing your submission.');
+        }
+    }
+
+    /**
+     * Handles verification modals.
+     * @private
+     */
+    async _handleVerificationModals(interaction) {
+        const customId = interaction.customId;
+        
+        if (customId === 'verifyModal') {
+            const verifyCmd = this.client.commands.get('verify');
+            if (verifyCmd && typeof verifyCmd.handleModalSubmit === 'function') {
+                await verifyCmd.handleModalSubmit(interaction);
+            } else {
+                await this._safeReply(interaction, {
+                    content: '⚠️ Verification system temporarily unavailable.',
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+            return true;
+        }
+        
+        if (customId === 'confirmOtpModal') {
+            const confirmOtpCmd = this.client.commands.get('confirmotp');
+            if (confirmOtpCmd && typeof confirmOtpCmd.handleModalSubmit === 'function') {
+                await confirmOtpCmd.handleModalSubmit(interaction);
+            } else {
+                await this._safeReply(interaction, {
+                    content: '⚠️ OTP confirmation system temporarily unavailable.',
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Handles suggestion modals.
+     * @private
+     */
+    async _handleSuggestionModals(interaction) {
+        const customId = interaction.customId;
+        
+        if (customId.startsWith('deny_reason_modal_')) {
+            const suggestionId = customId.split('_')[3];
+            const reason = interaction.fields.getTextInputValue('denyReasonInput');
+            await this._processSuggestionDenial(interaction, suggestionId, reason);
+            return true;
+        }
+        
+        if (customId.startsWith('delete_reason_modal_')) {
+            const suggestionId = customId.split('_')[3];
+            const reason = interaction.fields.getTextInputValue('deleteReasonInput');
+            await this._processSuggestionDelete(interaction, suggestionId, reason);
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Handles unknown interaction types.
+     * @private
+     */
+    async _handleUnknownInteraction(interaction) {
+        this.debugConfig.log(`Unknown interaction type: ${interaction.type}`, 'interaction', { 
+            user: interaction.user.tag, 
+            type: interaction.type 
+        }, null, 'warn');
+    }
+
+    /**
+     * Improved safe reply method with proper flag handling.
+     * @private
+     */
+    async _safeReply(interaction, options) {
+        // Convert ephemeral to flags if needed
+        const replyOptions = { ...options };
+        if (replyOptions.ephemeral !== undefined) {
+            replyOptions.flags = replyOptions.ephemeral ? MessageFlags.Ephemeral : undefined;
+            delete replyOptions.ephemeral;
+        }
+
+        try {
+            if (interaction.replied) {
+                await interaction.followUp(replyOptions);
+            } else if (interaction.deferred) {
+                await interaction.editReply(replyOptions);
+            } else {
+                await interaction.reply(replyOptions);
+            }
+        } catch (error) {
+            this.debugConfig.log('Failed to send interaction response', 'interaction', {
+                user: interaction.user?.tag,
+                replied: interaction.replied,
+                deferred: interaction.deferred,
+                errorCode: error.code
+            }, error, 'error');
+
+            // Handle specific error cases
+            if (error.code === 10062) {
+                this.debugConfig.log('Interaction expired', 'interaction', { user: interaction.user?.tag }, null, 'warn');
+                return;
+            }
+
+            if (error.code === 40060) {
+                this.debugConfig.log('Interaction already acknowledged', 'interaction', { user: interaction.user?.tag }, null, 'warn');
+                return;
+            }
+
+            // Last resort attempt
+            if (!interaction.replied) {
+                try {
+                    await interaction.followUp({
+                        content: '⚠️ There was an error processing your request.',
+                        flags: MessageFlags.Ephemeral
+                    });
+                } catch (followUpError) {
+                    this.debugConfig.log('Failed followUp attempt', 'interaction', { user: interaction.user?.tag }, followUpError, 'error');
+                }
+            }
+        }
+    }
+
+    /**
+     * Safe error reply method.
+     * @private
+     */
+    async _safeErrorReply(interaction, message) {
+        const options = {
+            content: message,
+            flags: MessageFlags.Ephemeral,
+            components: [],
+            embeds: []
+        };
+
+        try {
+            if (interaction.replied) {
+                await interaction.followUp(options);
+            } else if (interaction.deferred) {
+                await interaction.editReply(options);
+            } else {
+                await interaction.reply(options);
+            }
+        } catch (error) {
+            if (error.code !== 10062 && error.code !== 40060) {
+                this.debugConfig.log('Failed to send error reply', 'interaction', { user: interaction.user?.tag }, error, 'error');
+            }
+        }
+    }
+
+    /**
+     * Ensures interaction is deferred with proper error handling.
+     * @private
+     */
+    async _ensureDeferred(interaction, update = false) {
+        if (interaction.replied || interaction.deferred) {
+            return true;
+        }
+
+        try {
+            if (update) {
+                await interaction.deferUpdate();
+            } else {
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            }
+            return true;
+        } catch (error) {
+            if (error.code === 10062) {
+                this.debugConfig.log('Interaction expired before deferring', 'interaction', { 
+                    customId: interaction.customId,
+                    type: interaction.type 
+                }, null, 'warn');
+                return false;
+            }
+            
+            if (error.code === 40060) {
+                this.debugConfig.log('Interaction already acknowledged', 'interaction', { 
+                    customId: interaction.customId,
+                    type: interaction.type 
+                }, null, 'warn');
+                return true;
+            }
+            
+            throw error;
+        }
+    }
+
+    /**
+     * Enhanced interaction error handler.
+     * @private
+     */
+    async _handleInteractionError(interaction, error, context = {}) {
+        const duration = Date.now() - (context.startTime || Date.now());
+        
+        // Classify error types
+        let errorType = 'unknown';
+        if (error.code === 10062) errorType = 'expired';
+        else if (error.code === 40060) errorType = 'already_acknowledged';
+        else if (error.code === 50013) errorType = 'missing_permissions';
+        else if (error.name === 'TypeError') errorType = 'type_error';
+
+        this.debugConfig.log('Interaction error', 'interaction', {
+            ...context,
+            duration,
+            errorName: error.name,
+            errorCode: error.code,
+            errorType
+        }, error, 'error');
+
+        // Don't respond to expired or acknowledged interactions
+        if (error.code === 10062 || error.code === 40060) {
+            return;
+        }
+
+        // Only send error response if not already handled
+        if (!interaction.replied && !interaction.deferred) {
+            await this._safeErrorReply(interaction, '⚠️ An unexpected error occurred. Please try again later.');
+        }
+    }
+
+    /**
+     * Rate limiting implementation.
+     * @private
+     */
+    _isRateLimited(userId, action, limit = 5, window = 60000) {
+        const key = `${userId}:${action}`;
+        const now = Date.now();
+        const userActions = this.rateLimitMap.get(key) || [];
+
+        const recentActions = userActions.filter(time => now - time < window);
+
+        if (recentActions.length >= limit) {
+            return true;
+        }
+
+        recentActions.push(now);
+        this.rateLimitMap.set(key, recentActions);
+
+        // Cleanup occasionally
+        if (Math.random() < 0.01) {
+            this._cleanupRateLimitMap();
+        }
+
+        return false;
+    }
+
+    /**
+     * Cleans up expired rate limit entries.
+     * @private
+     */
+    _cleanupRateLimitMap() {
+        const now = Date.now();
+        const maxAge = 300000; // 5 minutes
+
+        for (const [key, actions] of this.rateLimitMap.entries()) {
+            const recentActions = actions.filter(time => now - time < maxAge);
+            if (recentActions.length === 0) {
+                this.rateLimitMap.delete(key);
+            } else {
+                this.rateLimitMap.set(key, recentActions);
+            }
+        }
+    }
+
+    /**
+     * Gets verified users from database.
+     * @private
+     */
+    async _getVerifiedUsers(guildId) {
+        return new Promise((resolve, reject) => {
+            this.client.db.all(
+                `SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
+                [guildId],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                }
+            );
+        });
+    }
+
+    // ===================================================================================
+    // == CORE EVENT HANDLERS ============================================================
+    // ===================================================================================
+
+    /**
+     * Enhanced voice state update handler.
      * @private
      */
     async _onVoiceStateUpdate(oldState, newState) {
@@ -560,235 +921,219 @@ class PulchowkBot {
         const guildId = newState.guild.id;
         const currentTime = Date.now();
 
-        if (!oldState.channelId && newState.channelId) {
-            this.client.db.run(`INSERT OR REPLACE INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
-                [userId, guildId, newState.channelId, currentTime],
-                (err) => {
-                    if (err) this.debugConfig.log('Error inserting active voice session:', 'event', null, err, 'error');
-                    else {
-                        this.voiceStates.set(userId, { guildId, channelId: newState.channelId, joinTime: currentTime });
-                        this.debugConfig.log(`[Voice] ${newState.member.user.tag} joined voice channel ${newState.channel.name}. Session started.`, 'event', { userId, channelId: newState.channelId }, null, 'info');
-                    }
-                }
-            );
-        }
-        else if (oldState.channelId && (!newState.channelId || oldState.channelId !== newState.channelId)) {
-            this.client.db.get(`SELECT join_time FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], async (err, row) => {
-                if (err) {
-                    this.debugConfig.log('Error fetching active voice session for update:', 'event', null, err, 'error');
-                    return;
-                }
-                if (row) {
-                    const durationMs = currentTime - row.join_time;
-                    const durationMinutes = Math.floor(durationMs / (1000 * 60));
+        const userLeft = oldState.channelId && !newState.channelId;
+        const userMoved = oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId;
+        const userJoined = !oldState.channelId && newState.channelId;
 
-                    if (durationMinutes > 0) {
-                        this.client.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 0, ?)
-                                     ON CONFLICT(user_id, guild_id) DO UPDATE SET voice_time_minutes = voice_time_minutes + ?`,
-                            [userId, guildId, durationMinutes, durationMinutes],
-                            (updateErr) => {
-                                if (updateErr) this.debugConfig.log('Error updating voice time in user_stats:', 'event', null, updateErr, 'error');
-                                else this.debugConfig.log(`[Voice] Updated voice time for ${oldState.member.user.tag} by ${durationMinutes} minutes.`, 'event', { userId, durationMinutes }, null, 'info');
-                            }
-                        );
-                    }
-                    this.client.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (deleteErr) => {
-                        if (deleteErr) this.debugConfig.log('Error deleting active voice session:', 'event', null, deleteErr, 'error');
-                        else this.debugConfig.log(`[Voice] Session for ${oldState.member.user.tag} ended/moved.`, 'event', { userId }, null, 'info');
-                    });
-                } else {
-                    this.debugConfig.log(`[Voice] No active session found in DB for ${oldState.member.user.tag} when leaving/moving channel.`, 'event', { userId }, null, 'warn');
-                }
-                this.voiceStates.delete(userId);
-                if (newState.channelId) {
-                    this.client.db.run(`INSERT INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
-                        [userId, guildId, newState.channelId, currentTime],
+        // Handle leaving/moving
+        if (userLeft || userMoved) {
+            const session = this.voiceStates.get(userId);
+            if (session) {
+                const durationMs = currentTime - session.joinTime;
+                const durationMinutes = Math.floor(durationMs / (1000 * 60));
+
+                if (durationMinutes > 0) {
+                    this.client.db.run(
+                        `INSERT INTO user_stats (user_id, guild_id, messages_sent, voice_time_minutes) VALUES (?, ?, 0, ?)
+                         ON CONFLICT(user_id, guild_id) DO UPDATE SET voice_time_minutes = voice_time_minutes + ?`,
+                        [userId, guildId, durationMinutes, durationMinutes],
                         (err) => {
-                            if (err) this.debugConfig.log('Error inserting new active voice session after move:', 'event', null, err, 'error');
-                            else {
-                                this.voiceStates.set(userId, { guildId, channelId: newState.channelId, joinTime: currentTime });
-                                this.debugConfig.log(`[Voice] ${newState.member.user.tag} moved to ${newState.channel.name}. New session started.`, 'event', { userId, newChannelId: newState.channelId }, null, 'info');
+                            if (err) {
+                                this.debugConfig.log('Error updating voice time:', 'event', null, err, 'error');
+                            } else {
+                                this.debugConfig.log(`Updated voice time for ${oldState.member.user.tag}: ${durationMinutes} minutes`, 'event');
                             }
                         }
                     );
                 }
+
+                this.voiceStates.delete(userId);
+                this.client.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId]);
+            }
+        }
+
+        // Handle joining/moving
+        if (userJoined || userMoved) {
+            this.voiceStates.set(userId, {
+                guildId,
+                channelId: newState.channelId,
+                joinTime: currentTime
             });
+
+            this.client.db.run(
+                `INSERT OR REPLACE INTO active_voice_sessions (user_id, guild_id, channel_id, join_time) VALUES (?, ?, ?, ?)`,
+                [userId, guildId, newState.channelId, currentTime],
+                (err) => {
+                    if (err) {
+                        this.debugConfig.log('Error inserting voice session:', 'event', null, err, 'error');
+                    } else {
+                        this.debugConfig.log(`${newState.member.user.tag} joined ${newState.channel.name}`, 'event');
+                    }
+                }
+            );
         }
     }
 
     /**
-     * Handles new messages created in guilds.
-     * @param {import('discord.js').Message} message The message object.
+     * Enhanced message create handler.
      * @private
      */
     async _onMessageCreate(message) {
         if (message.author.bot || !message.guild) return;
 
-        await this._handleAntiSpam(message);
-        await this._updateUserMessageStats(message);
+        try {
+            await Promise.all([
+                this._handleAntiSpam(message),
+                this._updateUserMessageStats(message)
+            ]);
+        } catch (error) {
+            this.debugConfig.log('Error in message create handler', 'event', { messageId: message.id }, error, 'error');
+        }
     }
 
     /**
-     * Handles new guild members joining.
-     * @param {import('discord.js').GuildMember} member The guild member.
+     * Enhanced guild member add handler.
      * @private
      */
     async _onGuildMemberAdd(member) {
-        if (member.user.bot) return; 
+        if (member.user.bot) return;
 
-        this.debugConfig.log(`User ${member.user.tag} (${member.user.id}) joined guild ${member.guild.name} (${member.guild.id}).`, 'event', { user: member.user.id, guild: member.guild.id }, null, 'info');
+        this.debugConfig.log(`User ${member.user.tag} joined ${member.guild.name}`, 'event', {
+            user: member.user.id,
+            guild: member.guild.id
+        });
 
-        const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
-        const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
-        this.client.db.get(`SELECT welcome_message_content, welcome_channel_id, send_welcome_as_dm FROM guild_configs WHERE guild_id = ?`, [member.guild.id], async (err, row) => {
-            if (err) {
-                this.debugConfig.log('Error fetching welcome config:', 'event', null, err, 'error');
-                return;
-            }
+        try {
+            const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
+            const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
 
-            let welcomeMessage = row?.welcome_message_content || `Welcome to ${member.guild.name}, ${member}!`;
-            welcomeMessage = welcomeMessage.replace(/{user}/g, member.toString())
-                                           .replace(/{guild}/g, member.guild.name);
+            // Check if previously verified
+            const verifiedRow = await new Promise((resolve, reject) => {
+                this.client.db.get(
+                    `SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`,
+                    [member.user.id, member.guild.id],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
 
             let dmEmbed;
             let dmComponents = [];
-            this.client.db.get(`SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`, [member.user.id, member.guild.id], async (err, verifiedRow) => {
-                if (err) {
-                    this.debugConfig.log('Error checking verified_users table:', 'event', null, err, 'error');
-                }
 
-                if (verifiedRow) {
-                    this.debugConfig.log(`User ${member.user.tag} was previously verified. Attempting to re-assign role.`, 'event', { user: member.user.id }, null, 'info');
-                    if (VERIFIED_ROLE_ID) {
-                        const verifiedRole = member.guild.roles.cache.get(VERIFIED_ROLE_ID);
-                        if (verifiedRole) {
-                            try {
-                                await member.roles.add(verifiedRole);
-                                this.debugConfig.log(`Re-assigned verified role to ${member.user.tag}.`, 'event', { user: member.user.id, role: verifiedRole.name }, null, 'success');
-                            } catch (roleErr) {
-                                this.debugConfig.log(`Failed to re-assign verified role to ${member.user.tag}:`, 'event', null, roleErr, 'error');
-                            }
-                        } else {
-                            this.debugConfig.log(`VERIFIED_ROLE_ID (${VERIFIED_ROLE_ID}) not found in guild ${member.guild.name}.`, 'event', { guild: member.guild.id }, null, 'warn');
+            if (verifiedRow) {
+                // Previously verified - restore role
+                if (VERIFIED_ROLE_ID) {
+                    const verifiedRole = member.guild.roles.cache.get(VERIFIED_ROLE_ID);
+                    if (verifiedRole) {
+                        try {
+                            await member.roles.add(verifiedRole);
+                            this.debugConfig.log(`Re-assigned verified role to ${member.user.tag}`, 'event', null, null, 'success');
+                        } catch (roleErr) {
+                            this.debugConfig.log('Failed to re-assign verified role', 'event', null, roleErr, 'error');
                         }
                     }
-
-                    dmEmbed = new EmbedBuilder()
-                        .setColor('#00FF00')
-                        .setTitle(`👋 Welcome Back to ${member.guild.name}!`)
-                        .setDescription(`It's great to see you again, **${member.user.username}**! You've been automatically re-verified. Enjoy your stay!`)
-                        .setThumbnail(userAvatar)
-                        .setFooter({ text: 'Pulchowk Bot | Welcome Back' })
-                        .setTimestamp();
-
-                } else {
-                    const verifyButton = new ButtonBuilder()
-                        .setCustomId(`verify_start_button_${member.user.id}`)
-                        .setLabel('Verify Your Account')
-                        .setStyle(ButtonStyle.Primary);
-
-                    dmComponents = [new ActionRowBuilder().addComponents(verifyButton)];
-
-                    dmEmbed = new EmbedBuilder()
-                        .setColor('#0099ff')
-                        .setTitle(`👋 Welcome to ${member.guild.name}!`)
-                        .setDescription(`We're excited to have you here, ${member.user.username}! To gain full access to the server, please verify your account.`)
-                        .addFields(
-                            { name: 'How to Verify:', value: 'Click the button below to start the verification process.' }
-                        )
-                        .setThumbnail(userAvatar)
-                        .setFooter({ text: 'Pulchowk Bot | Secure Verification' })
-                        .setTimestamp();
                 }
 
-                try {
-                    await member.send({ embeds: [dmEmbed], components: dmComponents });
-                    this.debugConfig.log(`Sent welcome DM to ${member.user.tag}.`, 'event', { user: member.user.id }, null, 'info');
-                } catch (dmErr) {
-                    this.debugConfig.log(`Could not send welcome DM to ${member.user.tag}:`, 'event', null, dmErr, 'warn');
-                }
+                dmEmbed = new EmbedBuilder()
+                    .setColor(this.colors.success)
+                    .setTitle(`👋 Welcome Back to ${member.guild.name}!`)
+                    .setDescription(`Great to see you again, **${member.user.username}**! You've been automatically re-verified.`)
+                    .setThumbnail(userAvatar)
+                    .setTimestamp();
+            } else {
+                // New user - needs verification
+                const verifyButton = new ButtonBuilder()
+                    .setCustomId(`verify_start_button_${member.user.id}`)
+                    .setLabel('Verify Your Account')
+                    .setStyle(ButtonStyle.Primary);
 
-                if (row && row.welcome_channel_id) {
-                    const channel = member.guild.channels.cache.get(row.welcome_channel_id);
-                    if (channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)) {
-                        const publicWelcomeEmbed = new EmbedBuilder()
-                            .setColor('#00FF00')
-                            .setTitle(`🎉 A New Pulchowkian Has Arrived!`)
-                            .setDescription(`Please give a warm welcome to <@${member.id}>!`)
-                            .setThumbnail(userAvatar)
-                            .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
-                            .setTimestamp();
+                dmComponents = [new ActionRowBuilder().addComponents(verifyButton)];
 
-                        if (row.welcome_message_content) {
-                            publicWelcomeEmbed.addFields({
-                                name: 'Message from the Admins:',
-                                value: row.welcome_message_content.replace(/{user}/g, `<@${member.id}>`).replace(/{guild}/g, member.guild.name)
-                            });
-                        }
+                dmEmbed = new EmbedBuilder()
+                    .setColor(this.colors.primary)
+                    .setTitle(`👋 Welcome to ${member.guild.name}!`)
+                    .setDescription('To gain full access, please click the button below to start verification.')
+                    .setThumbnail(userAvatar)
+                    .setTimestamp();
+            }
 
-                        await channel.send({ embeds: [publicWelcomeEmbed] }).catch(e => this.debugConfig.log('Error sending public welcome message:', 'event', null, e, 'error'));
-                        this.debugConfig.log(`Sent public welcome message to ${channel.name} for ${member.user.tag}`, 'event', { user: member.user.id, channel: channel.id }, null, 'info');
-                    } else {
-                        this.debugConfig.log(`Configured welcome channel ${row.welcome_channel_id} not found or is not a text/announcement channel for public welcome.`, 'event', { channelId: row.welcome_channel_id }, null, 'warn');
-                    }
-                }
+            // Send welcome DM
+            try {
+                await member.send({ embeds: [dmEmbed], components: dmComponents });
+                this.debugConfig.log(`Sent welcome DM to ${member.user.tag}`, 'event');
+            } catch (dmErr) {
+                this.debugConfig.log('Could not send welcome DM', 'event', { user: member.user.tag }, dmErr, 'warn');
+            }
+
+            // Send public welcome message
+            const guildConfig = await new Promise((resolve) => {
+                this.client.db.get(
+                    `SELECT welcome_channel_id, welcome_message_content FROM guild_configs WHERE guild_id = ?`,
+                    [member.guild.id],
+                    (err, row) => resolve(row)
+                );
             });
-        });
+
+            if (guildConfig && guildConfig.welcome_channel_id) {
+                const channel = member.guild.channels.cache.get(guildConfig.welcome_channel_id);
+                if (channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)) {
+                    const publicWelcomeEmbed = new EmbedBuilder()
+                        .setColor(this.colors.success)
+                        .setDescription(`Please give a warm welcome to ${member}!`)
+                        .setThumbnail(userAvatar)
+                        .setFooter({ text: `Member Count: ${member.guild.memberCount}` })
+                        .setTimestamp();
+
+                    await channel.send({ embeds: [publicWelcomeEmbed] });
+                }
+            }
+        } catch (error) {
+            this.debugConfig.log('Error in guild member add handler', 'event', { user: member.user.id }, error, 'error');
+        }
     }
 
     /**
-     * Handles members leaving a guild.
-     * @param {import('discord.js').GuildMember} member The guild member.
+     * Guild member remove handler.
      * @private
      */
     async _onGuildMemberRemove(member) {
         if (member.user.bot) return;
 
-        this.debugConfig.log(`User ${member.user.tag} (${member.user.id}) left guild ${member.guild.name} (${member.guild.id}).`, 'event', { user: member.user.id, guild: member.guild.id }, null, 'info');
+        this.debugConfig.log(`User ${member.user.tag} left ${member.guild.name}`, 'event', {
+            user: member.user.id,
+            guild: member.guild.id
+        });
 
         try {
-            const row = await new Promise((resolve, reject) => {
-                this.client.db.get(`SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`, [member.guild.id], (err, result) => {
-                    if (err) reject(err);
-                    else resolve(result);
-                });
+            const guildConfig = await new Promise((resolve) => {
+                this.client.db.get(
+                    `SELECT farewell_channel_id FROM guild_configs WHERE guild_id = ?`,
+                    [member.guild.id],
+                    (err, row) => resolve(row)
+                );
             });
-            let farwellChannelId = row?.farewell_channel_id || process.env.FAREWELL_CHANNEL_ID;
-            if (row && farwellChannelId) {
-                const farewellChannel = member.guild.channels.cache.get(farwellChannelId);
-                if (farewellChannel && (farewellChannel.type === ChannelType.GuildText || farewellChannel.type === ChannelType.GuildAnnouncement)) {
-                    await farewellChannel.send({ embeds: [new EmbedBuilder()
-                        .setColor('#FF0000')
-                        .setDescription(`👋 **${member.user.tag}** has left the server. We'll miss them!`)
-                        .setTimestamp()
-                    ]}).catch(e => this.debugConfig.log("Error sending farewell message to channel:", 'event', null, e, 'error'));
-                    this.debugConfig.log(`Successfully attempted to send farewell message to channel for ${member.user.tag}.`, 'event', { user: member.user.id, channel: farwellChannelId }, null, 'info');
-                } else {
-                    this.debugConfig.log(`Configured farewell channel ${farwellChannelId} not found or is not a text/announcement channel.`, 'event', { channelId: farwellChannelId }, null, 'warn');
+
+            const farewellChannelId = guildConfig?.farewell_channel_id || process.env.FAREWELL_CHANNEL_ID;
+            if (farewellChannelId) {
+                const channel = member.guild.channels.cache.get(farewellChannelId);
+                if (channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)) {
+                    const farewellEmbed = new EmbedBuilder()
+                        .setColor(this.colors.error)
+                        .setDescription(`👋 **${member.user.tag}** has left the server.`)
+                        .setTimestamp();
+
+                    await channel.send({ embeds: [farewellEmbed] });
                 }
             }
-            const farewellEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle(`Goodbye from ${member.guild.name}!`)
-                .setDescription(`We're sorry to see you go, **${member.user.username}**! We hope you had a good time with us.`)
-                .setThumbnail(member.guild.iconURL())
-                .setTimestamp()
-                .setFooter({ text: 'Pulchowk Bot | You can rejoin anytime!' });
-
-            await member.user.send({ embeds: [farewellEmbed] }).catch(error => {
-                this.debugConfig.log(`Could not send farewell DM to ${member.user.tag}:`, 'event', null, error, 'warn');
-            });
-            this.debugConfig.log(`Successfully attempted to send farewell DM to ${member.user.tag}.`, 'event', { user: member.user.id }, null, 'info');
-            await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-            this.debugConfig.log('An unexpected error occurred during guild member removal process:', 'event', null, error, 'error');
+            this.debugConfig.log('Error in farewell message', 'event', { user: member.user.id }, error, 'error');
         }
     }
 
     /**
-     * Handles reactions being added to messages.
-     * @param {import('discord.js').MessageReaction} reaction The message reaction.
-     * @param {import('discord.js').User} user The user who added the reaction.
+     * Enhanced reaction add handler.
      * @private
      */
     async _onMessageReactionAdd(reaction, user) {
@@ -796,112 +1141,44 @@ class PulchowkBot {
             try {
                 await reaction.fetch();
             } catch (error) {
-                this.debugConfig.log('Something went wrong when fetching the reaction:', 'event', null, error, 'error');
+                this.debugConfig.log('Error fetching partial reaction', 'event', null, error, 'error');
                 return;
             }
         }
+
         if (user.bot || !reaction.message.guild) return;
 
-        this.client.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
-            [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
-            async (err, row) => {
-                if (err) {
-                    this.debugConfig.log('Error fetching reaction role:', 'event', null, err, 'error');
-                    return;
-                }
-                if (row) {
-                    const member = reaction.message.guild.members.cache.get(user.id);
-                    if (member) {
-                        const role = reaction.message.guild.roles.cache.get(row.role_id);
-                        if (role) {
-                            if (!member.roles.cache.has(role.id)) {
-                                if (!reaction.message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
-                                    this.debugConfig.log(`Bot lacks 'Manage Roles' permission to assign role ${role.name} for reaction role.`, 'event', { role: role.name }, null, 'error');
-                                    return;
-                                }
-                                if (reaction.message.guild.members.me.roles.highest.position <= role.position) {
-                                    this.debugConfig.log(`Bot's highest role is not above ${role.name} for reaction role assignment.`, 'event', { role: role.name }, null, 'error');
-                                    return;
-                                }
-                                try {
-                                    await member.roles.add(role, 'Reaction role assignment');
-                                    this.debugConfig.log(`Assigned role ${role.name} to ${user.tag} via reaction.`, 'event', { user: user.id, role: role.name }, null, 'info');
-                                } catch (roleErr) {
-                                    this.debugConfig.log(`Error assigning role ${role.name} to ${user.tag}:`, 'event', null, roleErr, 'error');
-                                }
-                            }
-                        } else {
-                            this.debugConfig.log(`Configured role ${row.role_id} for reaction role not found in guild ${reaction.message.guild.name}. Deleting invalid entry.`, 'event', { roleId: row.role_id, guild: reaction.message.guild.id }, null, 'warn');
-                            this.client.db.run(`DELETE FROM reaction_roles WHERE role_id = ? AND guild_id = ?`, [row.role_id, reaction.message.guild.id]);
-                        }
-                    }
+        try {
+            // Reaction roles
+            const reactionRole = await new Promise((resolve) => {
+                this.client.db.get(
+                    `SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
+                    [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
+                    (err, row) => resolve(row)
+                );
+            });
+
+            if (reactionRole) {
+                const member = reaction.message.guild.members.cache.get(user.id);
+                const role = reaction.message.guild.roles.cache.get(reactionRole.role_id);
+                
+                if (member && role && !member.roles.cache.has(role.id)) {
+                    await member.roles.add(role, 'Reaction role assignment');
                 }
             }
-        );
 
-        const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
-        if (reaction.message.channel.id === SUGGESTIONS_CHANNEL_ID && (reaction.emoji.name === '👍' || reaction.emoji.name === '👎')) {
-            const message = await reaction.message.fetch().catch(e => this.debugConfig.log('Error fetching suggestion message for reaction:', 'event', null, e, 'error'));
-            if (!message) return;
-
-            this.client.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
-                [message.id, message.guild.id],
-                async (err, row) => {
-                    if (err) {
-                        this.debugConfig.log('Error fetching suggestion for voting:', 'event', null, err, 'error');
-                        return;
-                    }
-                    if (row) {
-                        if (user.id === row.user_id) {
-                            await reaction.users.remove(user.id).catch(e => this.debugConfig.log('Error removing self-vote reaction:', 'event', null, e, 'error'));
-                            return;
-                        }
-
-                        let newUpvotes = row.upvotes || 0;
-                        let newDownvotes = row.downvotes || 0;
-
-                        const hasUpvoted = message.reactions.cache.get('👍')?.users.cache.has(user.id);
-                        const hasDownvoted = message.reactions.cache.get('👎')?.users.cache.has(user.id);
-
-                        if (reaction.emoji.name === '👍') {
-                            if (hasDownvoted) {
-                                await message.reactions.cache.get('👎').users.remove(user.id).catch(e => this.debugConfig.log('Error removing opposite reaction (downvote):', 'event', null, e, 'error'));
-                                newDownvotes = Math.max(0, newDownvotes - 1);
-                            }
-                            newUpvotes++;
-                        } else if (reaction.emoji.name === '👎') {
-                            if (hasUpvoted) {
-                                await message.reactions.cache.get('👍').users.remove(user.id).catch(e => this.debugConfig.log('Error removing opposite reaction (upvote):', 'event', null, e, 'error'));
-                                newUpvotes = Math.max(0, newUpvotes - 1);
-                            }
-                            newDownvotes++;
-                        }
-
-                        this.client.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
-                            [newUpvotes, newDownvotes, row.id],
-                            (updateErr) => {
-                                if (updateErr) {
-                                    this.debugConfig.log('Error updating suggestion votes:', 'event', null, updateErr, 'error');
-                                    return;
-                                }
-                                if (message.embeds[0]) {
-                                    const updatedEmbed = EmbedBuilder.from(message.embeds[0])
-                                        .setFooter({ text: `Suggestion ID: ${row.id} | Votes: 👍 ${newUpvotes} / 👎 ${newDownvotes}` });
-                                    message.edit({ embeds: [updatedEmbed] }).catch(e => this.debugConfig.log('Error editing suggestion message embed:', 'event', null, e, 'error'));
-                                }
-                                this.debugConfig.log(`Updated votes for suggestion ${row.id}: 👍 ${newUpvotes} / 👎 ${newDownvotes}`, 'event', { suggestionId: row.id }, null, 'info');
-                            }
-                        );
-                    }
-                }
-            );
+            // Suggestion voting
+            const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
+            if (reaction.message.channel.id === SUGGESTIONS_CHANNEL_ID && ['👍', '👎'].includes(reaction.emoji.name)) {
+                await this._updateSuggestionVotes(reaction.message);
+            }
+        } catch (error) {
+            this.debugConfig.log('Error in reaction add handler', 'event', { messageId: reaction.message.id }, error, 'error');
         }
     }
 
     /**
-     * Handles reactions being removed from messages.
-     * @param {import('discord.js').MessageReaction} reaction The message reaction.
-     * @param {import('discord.js').User} user The user who removed the reaction.
+     * Enhanced reaction remove handler.
      * @private
      */
     async _onMessageReactionRemove(reaction, user) {
@@ -909,107 +1186,110 @@ class PulchowkBot {
             try {
                 await reaction.fetch();
             } catch (error) {
-                this.debugConfig.log('Something went wrong when fetching the reaction on remove:', 'event', null, error, 'error');
+                this.debugConfig.log('Error fetching partial reaction', 'event', null, error, 'error');
                 return;
             }
         }
+
         if (user.bot || !reaction.message.guild) return;
-        this.client.db.get(`SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
-            [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
-            async (err, row) => {
-                if (err) {
-                    this.debugConfig.log('Error fetching reaction role on remove:', 'event', null, err, 'error');
-                    return;
-                }
-                if (row) {
-                    const member = reaction.message.guild.members.cache.get(user.id);
-                    if (member) {
-                        const role = reaction.message.guild.roles.cache.get(row.role_id);
-                        if (role) {
-                            if (member.roles.cache.has(role.id)) {
-                                if (!reaction.message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
-                                    this.debugConfig.log(`Bot lacks 'Manage Roles' permission to remove role ${role.name} for reaction role.`, 'event', { role: role.name }, null, 'error');
-                                    return;
-                                }
-                                if (reaction.message.guild.members.me.roles.highest.position <= role.position) {
-                                    this.debugConfig.log(`Bot's highest role is not above ${role.name} for reaction role removal.`, 'event', { role: role.name }, null, 'error');
-                                    return;
-                                }
-                                try {
-                                    await member.roles.remove(role, 'Reaction role removal');
-                                    this.debugConfig.log(`Removed role ${role.name} from ${user.tag} via reaction.`, 'event', { user: user.id, role: role.name }, null, 'info');
-                                } catch (roleErr) {
-                                    this.debugConfig.log(`Error removing role ${role.name} from ${user.tag}:`, 'event', null, roleErr, 'error');
-                                }
-                            }
-                        }
-                    }
+
+        try {
+            // Reaction roles
+            const reactionRole = await new Promise((resolve) => {
+                this.client.db.get(
+                    `SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
+                    [reaction.message.guild.id, reaction.message.id, reaction.emoji.name],
+                    (err, row) => resolve(row)
+                );
+            });
+
+            if (reactionRole) {
+                const member = reaction.message.guild.members.cache.get(user.id);
+                const role = reaction.message.guild.roles.cache.get(reactionRole.role_id);
+                
+                if (member && role && member.roles.cache.has(role.id)) {
+                    await member.roles.remove(role, 'Reaction role removal');
                 }
             }
-        );
 
-        const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
-        if (reaction.message.channel.id === SUGGESTIONS_CHANNEL_ID && (reaction.emoji.name === '👍' || reaction.emoji.name === '👎')) {
-            const message = await reaction.message.fetch().catch(e => this.debugConfig.log('Error fetching suggestion message for reaction removal:', 'event', null, e, 'error'));
-            if (!message) return;
+            // Suggestion voting
+            const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
+            if (reaction.message.channel.id === SUGGESTIONS_CHANNEL_ID && ['👍', '👎'].includes(reaction.emoji.name)) {
+                await this._updateSuggestionVotes(reaction.message);
+            }
+        } catch (error) {
+            this.debugConfig.log('Error in reaction remove handler', 'event', { messageId: reaction.message.id }, error, 'error');
+        }
+    }
 
-            this.client.db.get(`SELECT id, upvotes, downvotes, user_id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
-                [message.id, message.guild.id],
-                async (err, row) => {
-                    if (err) {
-                        this.debugConfig.log('Error fetching suggestion for voting removal:', 'event', null, err, 'error');
-                        return;
+    // ===================================================================================
+    // == HELPER METHODS ==================================================================
+    // ===================================================================================
+
+    /**
+     * Updates suggestion votes based on reactions.
+     * @private
+     */
+    async _updateSuggestionVotes(message) {
+        if (!message || !message.guild) return;
+
+        try {
+            const upvotes = message.reactions.cache.get('👍')?.count || 0;
+            const downvotes = message.reactions.cache.get('👎')?.count || 0;
+
+            const suggestion = await new Promise((resolve, reject) => {
+                this.client.db.get(
+                    `SELECT id FROM suggestions WHERE message_id = ? AND guild_id = ?`,
+                    [message.id, message.guild.id],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
                     }
-                    if (row) {
-                        if (user.id === row.user_id) return; 
+                );
+            });
 
-                        let newUpvotes = row.upvotes || 0;
-                        let newDownvotes = row.downvotes || 0;
-
-                        if (reaction.emoji.name === '👍') {
-                            newUpvotes = Math.max(0, newUpvotes - 1);
-                        } else if (reaction.emoji.name === '👎') {
-                            newDownvotes = Math.max(0, newDownvotes - 1);
+            if (suggestion) {
+                await new Promise((resolve, reject) => {
+                    this.client.db.run(
+                        `UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
+                        [upvotes, downvotes, suggestion.id],
+                        (err) => {
+                            if (err) reject(err);
+                            else resolve();
                         }
+                    );
+                });
 
-                        this.client.db.run(`UPDATE suggestions SET upvotes = ?, downvotes = ? WHERE id = ?`,
-                            [newUpvotes, newDownvotes, row.id],
-                            (updateErr) => {
-                                if (updateErr) {
-                                    this.debugConfig.log('Error updating suggestion votes on removal:', 'event', null, updateErr, 'error');
-                                    return;
-                                }
-                                if (message.embeds[0]) {
-                                    const updatedEmbed = EmbedBuilder.from(message.embeds[0])
-                                        .setFooter({ text: `Suggestion ID: ${row.id} | Votes: 👍 ${newUpvotes} / 👎 ${newDownvotes}` });
-                                    message.edit({ embeds: [updatedEmbed] }).catch(e => this.debugConfig.log('Error editing suggestion message embed on removal:', 'event', null, e, 'error'));
-                                }
-                                this.debugConfig.log(`Updated votes for suggestion ${row.id} after removal: 👍 ${newUpvotes} / 👎 ${newDownvotes}`, 'event', { suggestionId: row.id }, null, 'info');
-                            }
-                        );
-                    }
+                if (message.embeds[0]) {
+                    const updatedEmbed = EmbedBuilder.from(message.embeds[0])
+                        .setFooter({ text: `Suggestion ID: ${suggestion.id} | Votes: 👍 ${upvotes} / 👎 ${downvotes}` });
+                    
+                    await message.edit({ embeds: [updatedEmbed] });
                 }
-            );
+            }
+        } catch (error) {
+            this.debugConfig.log('Error updating suggestion votes', 'event', { messageId: message.id }, error, 'error');
         }
     }
 
     /**
-     * Handles anti-spam logic for messages.
-     * @param {import('discord.js').Message} message The message object.
+     * Enhanced anti-spam handler.
      * @private
      */
     async _handleAntiSpam(message) {
-        if (!message.guild) {
-            return;
-        }
         const userId = message.author.id;
         const guildId = message.guild.id;
 
-        this.client.db.get(`SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold FROM anti_spam_configs WHERE guild_id = ?`, [guildId], async (err, config) => {
-            if (err) {
-                this.debugConfig.log('Error fetching anti-spam config:', 'event', null, err, 'error');
-                return;
-            }
+        try {
+            const config = await new Promise((resolve) => {
+                this.client.db.get(
+                    `SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold 
+                     FROM anti_spam_configs WHERE guild_id = ?`,
+                    [guildId],
+                    (err, row) => resolve(row)
+                );
+            });
+
             const antiSpamConfig = config || {
                 message_limit: 5,
                 time_window_seconds: 5,
@@ -1017,79 +1297,52 @@ class PulchowkBot {
                 kick_threshold: 3,
                 ban_threshold: 5
             };
+
             const { message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold } = antiSpamConfig;
 
             if (!this.spamMap.has(userId)) {
                 this.spamMap.set(userId, {
                     count: 1,
-                    lastMessageTimestamp: message.createdTimestamp,
-                    timer: setTimeout(() => {
-                        this.spamMap.delete(userId);
-                        this.debugConfig.log(`Anti-spam: Timer expired for user ${userId}. Resetting spam count.`, 'event', { userId }, null, 'verbose');
-                    }, time_window_seconds * 1000)
+                    timer: setTimeout(() => this.spamMap.delete(userId), time_window_seconds * 1000)
                 });
-                this.debugConfig.log(`Anti-spam: Initialized spam tracking for user ${userId}.`, 'event', { userId, count: 1 }, null, 'verbose');
             } else {
                 const userData = this.spamMap.get(userId);
                 userData.count++;
                 clearTimeout(userData.timer);
-                userData.timer = setTimeout(() => {
-                    this.spamMap.delete(userId);
-                    this.debugConfig.log(`Anti-spam: Timer re-expired for user ${userId}. Resetting spam count.`, 'event', { userId }, null, 'verbose');
-                }, time_window_seconds * 1000);
-
-                this.debugConfig.log(`Anti-spam: User ${userId} message count: ${userData.count}/${message_limit} within ${time_window_seconds}s.`, 'event', { userId, count: userData.count }, null, 'verbose');
+                userData.timer = setTimeout(() => this.spamMap.delete(userId), time_window_seconds * 1000);
 
                 if (userData.count > message_limit) {
                     this.spamWarnings.set(userId, (this.spamWarnings.get(userId) || 0) + 1);
                     const currentWarnings = this.spamWarnings.get(userId);
-                    this.debugConfig.log(`Anti-spam: User ${userId} triggered spam limit. Warnings: ${currentWarnings}.`, 'event', { userId, warnings: currentWarnings }, null, 'warn');
 
-                    if (currentWarnings >= ban_threshold) {
-                        if (message.member && message.member.bannable) {
-                            await message.member.ban({ reason: `Automated anti-spam: ${currentWarnings} spam warnings.` }).catch(e => this.debugConfig.log('Error banning:', 'event', null, e, 'error'));
-                            message.channel.send(`🚨 ${message.author.tag} has been banned for repeated spamming. (${currentWarnings} warnings)`).catch(e => console.error("Error sending ban message:", e));
-                            this.spamWarnings.delete(userId);
-                            this.debugConfig.log(`Anti-spam: User ${userId} banned.`, 'event', { userId }, null, 'critical');
-                        } else {
-                            message.channel.send(`🚨 Anti-spam: ${message.author.tag} is spamming but I cannot ban them.`).catch(e => console.error("Error sending ban failure message:", e));
-                            this.debugConfig.log(`Anti-spam: Cannot ban user ${userId}. Missing permissions or role hierarchy.`, 'event', { userId }, null, 'warn');
-                        }
-                    } else if (currentWarnings >= kick_threshold) {
-                        if (message.member && message.member.kickable) {
-                            await message.member.kick(`Automated anti-spam: ${currentWarnings} spam warnings.`).catch(e => this.debugConfig.log('Error kicking:', 'event', null, e, 'error'));
-                            message.channel.send(`⚠️ ${message.author.tag} has been kicked for excessive spamming. (${currentWarnings} warnings)`).catch(e => console.error("Error sending kick message:", e));
-                            this.debugConfig.log(`Anti-spam: User ${userId} kicked.`, 'event', { userId }, null, 'critical');
-                        } else {
-                            message.channel.send(`⚠️ Anti-spam: ${message.author.tag} is spamming but I cannot kick them.`).catch(e => console.error("Error sending kick failure message:", e));
-                            this.debugConfig.log(`Anti-spam: Cannot kick user ${userId}. Missing permissions or role hierarchy.`, 'event', { userId }, null, 'warn');
-                        }
-                    } else {
-                        const muteDurationMs = mute_duration_seconds * 1000;
-                        if (message.member && message.member.moderatable && !message.member.isCommunicationDisabled()) {
-                            await message.member.timeout(muteDurationMs, 'Automated anti-spam mute').catch(e => this.debugConfig.log('Error timing out:', 'event', null, e, 'error'));
-                            message.channel.send(`🔇 ${message.author.tag} has been timed out for ${mute_duration_seconds} seconds due to spamming. (Warning ${currentWarnings}/${kick_threshold})`).catch(e => console.error("Error sending mute message:", e));
-                            this.debugConfig.log(`Anti-spam: User ${userId} timed out for ${mute_duration_seconds}s.`, 'event', { userId, duration: mute_duration_seconds }, null, 'warn');
-                        } else {
-                            message.channel.send(`🔇 Anti-spam: ${message.author.tag} is spamming but I cannot mute them. (Warning ${currentWarnings}/${kick_threshold})`).catch(e => console.error("Error sending mute failure message:", e));
-                            this.debugConfig.log(`Anti-spam: Cannot mute user ${userId}. Missing permissions or role hierarchy.`, 'event', { userId }, null, 'warn');
-                        }
-                    }
+                    // Delete spam messages
                     if (message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
-                        await message.channel.bulkDelete(Math.min(userData.count, 100), true).catch(e => this.debugConfig.log('Error bulk deleting messages:', 'event', null, e, 'error'));
-                        this.debugConfig.log(`Anti-spam: Bulk deleted ${Math.min(userData.count, 100)} messages for user ${userId}.`, 'event', { userId, count: Math.min(userData.count, 100) }, null, 'info');
-                    } else {
-                        this.debugConfig.log(`Bot lacks 'Manage Messages' permission to delete spam messages in channel ${message.channel.name}.`, 'event', { channel: message.channel.id }, null, 'warn');
+                        await message.channel.bulkDelete(Math.min(userData.count, 100), true);
                     }
+
+                    // Apply moderation
+                    if (currentWarnings >= ban_threshold && message.member?.bannable) {
+                        await message.member.ban({ reason: `Anti-spam: ${currentWarnings} warnings.` });
+                        await message.channel.send(`🚨 ${message.author.tag} has been banned for repeated spamming.`);
+                        this.spamWarnings.delete(userId);
+                    } else if (currentWarnings >= kick_threshold && message.member?.kickable) {
+                        await message.member.kick(`Anti-spam: ${currentWarnings} warnings.`);
+                        await message.channel.send(`⚠️ ${message.author.tag} has been kicked for excessive spamming.`);
+                    } else if (message.member?.moderatable) {
+                        await message.member.timeout(mute_duration_seconds * 1000, 'Anti-spam mute');
+                        await message.channel.send(`🔇 ${message.author.tag} has been timed out for spamming. (Warning ${currentWarnings}/${kick_threshold})`);
+                    }
+
                     this.spamMap.delete(userId);
                 }
             }
-        });
+        } catch (error) {
+            this.debugConfig.log('Error in anti-spam handler', 'event', { userId, guildId }, error, 'error');
+        }
     }
 
     /**
-     * Updates user message statistics in the database.
-     * @param {import('discord.js').Message} message The message object.
+     * Updates user message statistics.
      * @private
      */
     async _updateUserMessageStats(message) {
@@ -1097,45 +1350,238 @@ class PulchowkBot {
         const guildId = message.guild.id;
         const now = Date.now();
 
-        this.client.db.run(`INSERT INTO user_stats (user_id, guild_id, messages_sent, last_message_at) VALUES (?, ?, 1, ?)
-                     ON CONFLICT(user_id, guild_id) DO UPDATE SET messages_sent = messages_sent + 1, last_message_at = ?`,
+        this.client.db.run(
+            `INSERT INTO user_stats (user_id, guild_id, messages_sent, last_message_at) VALUES (?, ?, 1, ?)
+             ON CONFLICT(user_id, guild_id) DO UPDATE SET messages_sent = messages_sent + 1, last_message_at = ?`,
             [userId, guildId, now, now],
             (err) => {
-                if (err) this.debugConfig.log('Error updating message stats:', 'event', null, err, 'error');
-                else this.debugConfig.log(`Updated message stats for user ${userId} in guild ${guildId}.`, 'event', { userId, guildId }, null, 'verbose');
+                if (err) {
+                    this.debugConfig.log('Error updating message stats', 'event', { userId }, err, 'error');
+                }
             }
         );
     }
 
     /**
-     * Checks for new notices from the configured source, processes attachments (PDF to PNG),
-     * and announces them to the designated Discord channel, splitting messages if too many attachments.
-     * Temporary files are cleaned up after each notice is processed.
+     * Placeholder for suggestion vote handling.
+     * @private
+     */
+    async _handleSuggestionVote(interaction) {
+        await this._safeReply(interaction, {
+            content: 'Your vote has been registered via reaction! Use 👍 or 👎 on the message itself.',
+            flags: MessageFlags.Ephemeral
+        });
+    }
+
+    /**
+     * Handles suggestion deletion.
+     * @private
+     */
+    async _handleSuggestionDelete(interaction) {
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+            await this._safeReply(interaction, {
+                content: '⚠️ You do not have permission to delete suggestions.',
+                flags: MessageFlags.Ephemeral
+            });
+            return;
+        }
+
+        const suggestionId = interaction.customId.split('_')[2];
+        const modal = new ModalBuilder()
+            .setCustomId(`delete_reason_modal_s_${suggestionId}`)
+            .setTitle('Delete Suggestion');
+
+        const reasonInput = new TextInputBuilder()
+            .setCustomId('deleteReasonInput')
+            .setLabel('Reason for deleting this suggestion:')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+        await interaction.showModal(modal);
+    }
+
+    /**
+     * Processes suggestion denial.
+     * @private
+     */
+    async _processSuggestionDenial(interaction, suggestionId, reason) {
+        try {
+            const suggestionRow = await new Promise((resolve, reject) => {
+                this.client.db.get(
+                    `SELECT message_id, user_id FROM suggestions WHERE id = ?`,
+                    [suggestionId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+
+            if (!suggestionRow) {
+                return this._safeErrorReply(interaction, `⚠️ Suggestion with ID \`${suggestionId}\` not found.`);
+            }
+
+            await new Promise((resolve, reject) => {
+                this.client.db.run(
+                    `UPDATE suggestions SET status = 'denied', reason = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
+                    [reason, interaction.user.id, Date.now(), suggestionId],
+                    (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                );
+            });
+
+            const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
+            const message = await suggestionsChannel?.messages.fetch(suggestionRow.message_id).catch(() => null);
+            
+            if (message?.embeds[0]) {
+                const updatedEmbed = EmbedBuilder.from(message.embeds[0])
+                    .setColor(this.colors.error)
+                    .addFields({ name: 'Status', value: `Denied by ${interaction.user.tag}\n**Reason:** ${reason}` });
+                
+                await message.edit({ embeds: [updatedEmbed], components: [] });
+            }
+
+            await this._safeReply(interaction, {
+                content: `✅ Suggestion \`${suggestionId}\` has been denied.`,
+                flags: MessageFlags.Ephemeral
+            });
+        } catch (error) {
+            this.debugConfig.log('Error processing suggestion denial', 'interaction', { suggestionId }, error, 'error');
+            await this._safeErrorReply(interaction, `⚠️ An error occurred while denying suggestion \`${suggestionId}\`.`);
+        }
+    }
+
+    /**
+     * Processes suggestion deletion.
+     * @private
+     */
+    async _processSuggestionDelete(interaction, suggestionId, reason) {
+        try {
+            const suggestionRow = await new Promise((resolve, reject) => {
+                this.client.db.get(
+                    `SELECT message_id, user_id FROM suggestions WHERE id = ?`,
+                    [suggestionId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+
+            if (!suggestionRow) {
+                return this._safeErrorReply(interaction, `⚠️ Suggestion with ID \`${suggestionId}\` not found.`);
+            }
+
+            await new Promise((resolve, reject) => {
+                this.client.db.run(
+                    `DELETE FROM suggestions WHERE id = ?`,
+                    [suggestionId],
+                    (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                );
+            });
+
+            const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
+            const message = await suggestionsChannel?.messages.fetch(suggestionRow.message_id).catch(() => null);
+            
+            if (message) {
+                await message.delete(`Deleted by ${interaction.user.tag}. Reason: ${reason}`);
+            }
+
+            await this._safeReply(interaction, {
+                content: `✅ Suggestion \`${suggestionId}\` has been deleted.`,
+                flags: MessageFlags.Ephemeral
+            });
+        } catch (error) {
+            this.debugConfig.log('Error processing suggestion deletion', 'interaction', { suggestionId }, error, 'error');
+            await this._safeErrorReply(interaction, `⚠️ An error occurred while deleting suggestion \`${suggestionId}\`.`);
+        }
+    }
+
+    // ===================================================================================
+    // == SCHEDULED JOBS ==================================================================
+    // ===================================================================================
+
+    /**
+     * Sets up all scheduled jobs with better error handling.
+     * @private
+     */
+    _scheduleJobs() {
+        try {
+            // Birthday announcements
+            schedule.scheduleJob('0 0 * * *', async () => {
+                this.debugConfig.log('Running daily birthday announcement...', 'scheduler');
+                try {
+                    await this._announceBirthdays();
+                } catch (error) {
+                    this.debugConfig.log('Error in birthday announcement job', 'scheduler', null, error, 'error');
+                }
+            });
+            this.debugConfig.log('Scheduled daily birthday announcements for 12 AM.', 'scheduler');
+
+            // RSS polling
+            const RSS_POLL_INTERVAL_MINUTES = parseInt(process.env.RSS_POLL_INTERVAL_MINUTES || '5');
+            if (RSS_POLL_INTERVAL_MINUTES > 0) {
+                schedule.scheduleJob(`*/${RSS_POLL_INTERVAL_MINUTES} * * * *`, async () => {
+                    this.debugConfig.log('Running RSS feed poll...', 'scheduler');
+                    try {
+                        await pollFeeds(this.client);
+                    } catch (error) {
+                        this.debugConfig.log('Error in RSS polling job', 'scheduler', null, error, 'error');
+                    }
+                });
+                this.debugConfig.log(`Scheduled RSS feed polling every ${RSS_POLL_INTERVAL_MINUTES} minutes.`, 'scheduler');
+            } else {
+                this.debugConfig.log('RSS polling disabled.', 'scheduler', null, null, 'warn');
+            }
+
+            // Notice checking
+            const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000');
+            if (NOTICE_CHECK_INTERVAL_MS > 0) {
+                this.debugConfig.log(`Initializing notice checking. Interval: ${NOTICE_CHECK_INTERVAL_MS / 1000} seconds.`, 'scheduler');
+                this._checkAndAnnounceNotices();
+                setInterval(() => {
+                    this._checkAndAnnounceNotices().catch(error => {
+                        this.debugConfig.log('Error in notice checking job', 'scheduler', null, error, 'error');
+                    });
+                }, NOTICE_CHECK_INTERVAL_MS);
+                this.debugConfig.log(`Scheduled notice checking every ${NOTICE_CHECK_INTERVAL_MS / 60000} minutes.`, 'scheduler');
+            } else {
+                this.debugConfig.log('Notice scraping disabled.', 'scheduler', null, null, 'warn');
+            }
+
+            this.debugConfig.log('All scheduled jobs set up successfully.', 'scheduler');
+        } catch (error) {
+            this.debugConfig.log('Error setting up scheduled jobs', 'scheduler', null, error, 'error');
+        }
+    }
+
+    /**
+     * Enhanced notice checking and announcement system.
      * @private
      */
     async _checkAndAnnounceNotices() {
-        this.debugConfig.log('Starting check for new notices...', 'scheduler', null, null, 'info');
+        this.debugConfig.log('Starting notice check...', 'scheduler');
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
         const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
         const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments');
 
-        this.debugConfig.log(`TARGET_NOTICE_CHANNEL_ID: ${TARGET_NOTICE_CHANNEL_ID}`, 'scheduler', null, null, 'verbose');
-        this.debugConfig.log(`NOTICE_ADMIN_CHANNEL_ID: ${NOTICE_ADMIN_CHANNEL_ID}`, 'scheduler', null, null, 'verbose');
-        this.debugConfig.log(`Current Working Directory (process.cwd()): ${process.cwd()}`, 'scheduler', null, null, 'verbose');
-        this.debugConfig.log(`Calculated TEMP_ATTACHMENT_DIR: ${TEMP_ATTACHMENT_DIR}`, 'scheduler', null, null, 'verbose');
-
         try {
+            // Create temp directory
             await fsPromises.mkdir(TEMP_ATTACHMENT_DIR, { recursive: true });
-            this.debugConfig.log(`Successfully ensured TEMP_ATTACHMENT_DIR exists: ${TEMP_ATTACHMENT_DIR}`, 'scheduler', null, null, 'verbose');
-        } catch (e) {
-            this.debugConfig.log(`Error creating TEMP_ATTACHMENT_DIR (${TEMP_ATTACHMENT_DIR}):`, 'scheduler', null, e, 'error');
-            let adminChannel;
+        } catch (error) {
+            this.debugConfig.log('Error creating temp directory', 'scheduler', null, error, 'error');
             if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
                 try {
-                    adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
-                    if (adminChannel) await adminChannel.send(`❌ Critical: Could not create temp directory: ${e.message}`).catch(sendErr => console.error("Error sending admin error:", sendErr));
+                    const adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
+                    await adminChannel?.send(`⚠️ Critical: Could not create temp directory: ${error.message}`);
                 } catch (fetchErr) {
-                    this.debugConfig.log(`Could not fetch admin channel for error notification:`, 'scheduler', null, fetchErr, 'warn');
+                    this.debugConfig.log('Could not notify admin of temp directory error', 'scheduler', null, fetchErr, 'warn');
                 }
             }
             return;
@@ -1147,34 +1593,27 @@ class PulchowkBot {
         }
 
         let noticeChannel;
+        let adminChannel = null;
+
         try {
             noticeChannel = await this.client.channels.fetch(TARGET_NOTICE_CHANNEL_ID);
             if (!noticeChannel || !(noticeChannel.type === ChannelType.GuildText || noticeChannel.type === ChannelType.GuildAnnouncement)) {
-                this.debugConfig.log(`Configured notice channel not found or is not a text/announcement channel.`, 'scheduler', { channelId: TARGET_NOTICE_CHANNEL_ID }, null, 'error');
+                this.debugConfig.log('Notice channel not found or invalid type', 'scheduler', { channelId: TARGET_NOTICE_CHANNEL_ID }, null, 'error');
                 return;
             }
+
+            if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
+                adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID).catch(() => null);
+            }
         } catch (error) {
-            this.debugConfig.log(`Error fetching notice channel ${TARGET_NOTICE_CHANNEL_ID}:`, 'scheduler', null, error, 'error');
+            this.debugConfig.log('Error fetching channels', 'scheduler', null, error, 'error');
             return;
         }
 
-        let adminChannel;
-        if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
-            try {
-                adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
-            } catch (error) {
-                this.debugConfig.log(`Could not fetch admin channel ${NOTICE_ADMIN_CHANNEL_ID}.`, 'scheduler', null, error, 'warn');
-                adminChannel = null;
-            }
-        }
-
         try {
-            this.debugConfig.log('Calling scrapeLatestNotice()...', 'scheduler', null, null, 'info');
-            let scrapedNotices = await scrapeLatestNotice();
-            this.debugConfig.log(`scrapeLatestNotice() returned: ${JSON.stringify(scrapedNotices)}`, 'scheduler', null, null, 'verbose');
-
+            const scrapedNotices = await scrapeLatestNotice();
             if (!scrapedNotices || scrapedNotices.length === 0) {
-                this.debugConfig.log('No notices found or scraper returned empty.', 'scheduler', null, null, 'info');
+                this.debugConfig.log('No notices found or scraper returned empty.', 'scheduler');
                 return;
             }
 
@@ -1184,7 +1623,7 @@ class PulchowkBot {
             const noticesToAnnounce = scrapedNotices.filter(notice => {
                 const noticeDate = new Date(notice.date);
                 if (isNaN(noticeDate.getTime())) {
-                    this.debugConfig.log(`Invalid date format for notice: ${notice.title} - ${notice.date}`, 'scheduler', { notice }, null, 'warn');
+                    this.debugConfig.log(`Invalid date format: ${notice.title} - ${notice.date}`, 'scheduler', { notice }, null, 'warn');
                     return false;
                 }
 
@@ -1193,542 +1632,398 @@ class PulchowkBot {
             });
 
             if (noticesToAnnounce.length === 0) {
-                this.debugConfig.log(`No notices found in the last ${MAX_NOTICE_AGE_DAYS} days.`, 'scheduler', null, null, 'info');
+                this.debugConfig.log(`No notices found in the last ${MAX_NOTICE_AGE_DAYS} days.`, 'scheduler');
                 return;
             }
-            this.debugConfig.log(`Found ${noticesToAnnounce.length} notices to announce from the past ${MAX_NOTICE_AGE_DAYS} days.`, 'scheduler', null, null, 'info');
+
+            this.debugConfig.log(`Processing ${noticesToAnnounce.length} notices from the past ${MAX_NOTICE_AGE_DAYS} days.`, 'scheduler');
 
             for (const notice of noticesToAnnounce) {
                 let tempFilesOnDisk = [];
+                
                 try {
-                    if (!notice || !notice.title || !notice.link) {
-                        this.debugConfig.log('Scraper returned an invalid notice object:', 'scheduler', { notice }, null, 'warn');
+                    if (!notice?.title || !notice?.link) {
+                        this.debugConfig.log('Invalid notice object', 'scheduler', { notice }, null, 'warn');
                         continue;
                     }
-                    const row = await new Promise((resolve, reject) => {
-                        this.client.db.get(`SELECT COUNT(*) AS count FROM notices WHERE link = ?`, [notice.link], (err, result) => {
-                            if (err) reject(err);
-                            else resolve(result);
-                        });
+
+                    // Check if already announced
+                    const existingNotice = await new Promise((resolve, reject) => {
+                        this.client.db.get(
+                            `SELECT COUNT(*) AS count FROM notices WHERE link = ?`,
+                            [notice.link],
+                            (err, result) => {
+                                if (err) reject(err);
+                                else resolve(result);
+                            }
+                        );
                     });
 
-                    if (row.count === 0) {
-                        this.debugConfig.log(`New notice found from ${notice.source}: ${notice.title}`, 'scheduler', null, null, 'info');
-                        const noticeEmbed = new EmbedBuilder()
-                            .setColor('#1E90FF')
-                            .setTitle(`Notice ${notice.id ? notice.id + ': ' : ''}${notice.title}`)
-                            .setURL(notice.link)
-                            .setFooter({ text: `Source: ${notice.source}` })
-                            .setTimestamp(new Date(notice.date));
-
-                        let allFilesForNotice = [];
-                        let description = `A new notice has been published.`;
-                        if (notice.attachments && notice.attachments.length > 0) {
-                            this.debugConfig.log(`Processing attachments for notice: ${notice.title}`, 'scheduler', { attachments: notice.attachments.length }, null, 'info');
-                            for (const attachmentUrl of notice.attachments) {
-                                try {
-                                    const fileName = path.basename(new URL(attachmentUrl).pathname);
-                                    const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
-                                    tempFilesOnDisk.push(tempFilePath);
-                                    this.debugConfig.log(`Attempting to download ${attachmentUrl} to ${tempFilePath}`, 'scheduler', null, null, 'verbose');
-                                    const response = await axios({
-                                        method: 'GET',
-                                        url: attachmentUrl,
-                                        responseType: 'stream'
-                                    });
-                                    const writer = createWriteStream(tempFilePath);
-                                    response.data.pipe(writer);
-                                    await new Promise((resolve, reject) => {
-                                        writer.on('finish', resolve);
-                                        writer.on('error', reject);
-                                    });
-                                    const MAX_PDF_PAGES_TO_CONVERT = 10;
-                                    if (fileName.toLowerCase().endsWith('.pdf')) {
-                                        try {
-                                            let totalPdfPages = 0;
-                                            try {
-                                                const pdfBuffer = await fsPromises.readFile(tempFilePath);
-                                                const uint8Array = new Uint8Array(pdfBuffer);
-
-                                                const loadingTask = getDocument({ data: uint8Array });
-                                                const pdfDocument = await loadingTask.promise;
-                                                totalPdfPages = pdfDocument.numPages;
-                                                this.debugConfig.log(`PDF ${fileName} has ${totalPdfPages} pages using pdfjs-dist.`, 'scheduler', { fileName, pages: totalPdfPages }, null, 'verbose');
-                                            } catch (pdfjsError) {
-                                                this.debugConfig.log(`Could not get page count for PDF ${fileName} using pdfjs-dist:`, 'scheduler', null, pdfjsError, 'warn');
-                                                totalPdfPages = MAX_PDF_PAGES_TO_CONVERT; 
-                                            }
-
-                                            const pdfConvertOptions = {
-                                                density: 150,
-                                                quality: 90,
-                                                height: 1754,
-                                                width: 1240,
-                                                format: "png",
-                                                saveFilename: path.parse(fileName).name,
-                                                savePath: TEMP_ATTACHMENT_DIR
-                                            };
-
-                                            const convert = fromPath(tempFilePath, pdfConvertOptions);
-                                            let pageConvertedCount = 0;
-
-                                            const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES_TO_CONVERT);
-
-                                            for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
-                                                try {
-                                                    const convertResponse = await convert(pageNum);
-
-                                                    if (convertResponse && convertResponse.path) {
-                                                        const pngFilePath = convertResponse.path;
-                                                        const pngFileName = path.basename(pngFilePath);
-                                                        tempFilesOnDisk.push(pngFilePath);
-                                                        allFilesForNotice.push(new AttachmentBuilder(pngFilePath, { name: pngFileName }));
-                                                        this.debugConfig.log(`Converted PDF ${fileName} page ${pageNum} to PNG and prepared for sending.`, 'scheduler', { page: pageNum, fileName: pngFileName }, null, 'verbose');
-                                                        pageConvertedCount++;
-                                                    } else {
-                                                        this.debugConfig.log(`No valid response for PDF ${fileName} at page ${pageNum}. Stopping conversion for this PDF.`, 'scheduler', { fileName, page: pageNum }, null, 'warn');
-                                                        break;
-                                                    }
-                                                } catch (pageConvertError) {
-                                                    this.debugConfig.log(`Could not convert PDF ${fileName} page ${pageNum}:`, 'scheduler', null, pageConvertError, 'warn');
-                                                    if (pageConvertError.message.includes('does not exist') || pageConvertError.message.includes('invalid page number')) {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-                                            if (pageConvertedCount === 0) {
-                                                this.debugConfig.log(`No pages converted for PDF ${fileName}. Sending original PDF.`, 'scheduler', { fileName }, null, 'warn');
-                                                allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
-                                            } else if (pageConvertedCount < totalPdfPages) {
-                                                this.debugConfig.log(`(Sent ${pageConvertedCount} of ${totalPdfPages} pages from ${fileName} as images.)`, 'scheduler', { converted: pageConvertedCount, total: totalPdfPages }, null, 'info');
-                                            } else {
-                                                this.debugConfig.log(`(Sent all ${totalPdfPages} pages from ${fileName} as images.)`, 'scheduler', { total: totalPdfPages }, null, 'info');
-                                            }
-
-                                        } catch (pdfProcessError) {
-                                            this.debugConfig.log(`Error processing PDF ${fileName}:`, 'scheduler', null, pdfProcessError, 'error');
-                                            description += `\n\n⚠️ Could not process PDF attachment: ${fileName}`;
-                                            allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
-                                        }
-                                    } else {
-                                        allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
-                                        this.debugConfig.log(`Prepared attachment: ${fileName}`, 'scheduler', { fileName }, null, 'verbose');
-                                    }
-                                } catch (downloadError) {
-                                    this.debugConfig.log(`Error downloading attachment ${attachmentUrl}:`, 'scheduler', null, downloadError, 'error');
-                                    description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
-                                }
-                            }
-                        }
-                        noticeEmbed.setDescription(description);
-
-                        const ATTACHMENT_LIMIT = 10;
-                        if (allFilesForNotice.length > 0) {
-                            let sentFirstMessage = false;
-                            for (let i = 0; i < allFilesForNotice.length; i += ATTACHMENT_LIMIT) {
-                                const chunk = allFilesForNotice.slice(i, i + ATTACHMENT_LIMIT);
-                                try {
-                                    if (!sentFirstMessage) {
-                                        await noticeChannel.send({ embeds: [noticeEmbed], files: chunk });
-                                        sentFirstMessage = true;
-                                    } else {
-                                        await noticeChannel.send({ content: `(Continued attachments for "${notice.title}")`, files: chunk });
-                                    }
-                                    this.debugConfig.log(`Sent chunk of ${chunk.length} attachments for "${notice.title}" to Discord.`, 'scheduler', { chunkLength: chunk.length, noticeTitle: notice.title }, null, 'info');
-                                } catch (discordSendError) {
-                                    this.debugConfig.log(`Error sending notice or files to channel ${TARGET_NOTICE_CHANNEL_ID} (chunk ${i / ATTACHMENT_LIMIT + 1}):`, 'scheduler', null, discordSendError, 'error');
-                                    if (adminChannel) await adminChannel.send(`❌ Error sending notice/files for "${notice.title}" (chunk ${i / ATTACHMENT_LIMIT + 1}): ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
-                                }
-                            }
-                        } else {
-                            try {
-                                await noticeChannel.send({ embeds: [noticeEmbed] });
-                                this.debugConfig.log(`Sent notice for "${notice.title}" to Discord (no attachments).`, 'scheduler', { noticeTitle: notice.title }, null, 'info');
-                            } catch (discordSendError) {
-                                this.debugConfig.log(`Error sending notice to channel ${TARGET_NOTICE_CHANNEL_ID}:`, 'scheduler', null, discordSendError, 'error');
-                                if (adminChannel) await adminChannel.send(`❌ Error sending notice for "${notice.title}": ${discordSendError.message}`).catch(e => console.error("Error sending admin error:", e));
-                            }
-                        }
-
-                        await new Promise((resolve, reject) => {
-                            this.client.db.run(`INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
-                                [notice.title, notice.link, notice.date, Date.now()],
-                                (insertErr) => {
-                                    if (insertErr) {
-                                        reject(insertErr);
-                                    } else {
-                                        this.debugConfig.log(`Announced and saved new notice: ${notice.title}`, 'scheduler', { noticeTitle: notice.title }, null, 'success');
-                                        resolve();
-                                    }
-                                }
-                            );
-                        }).catch(insertErr => {
-                            this.debugConfig.log('Error saving new notice to DB:', 'scheduler', null, insertErr, 'error');
-                            if (adminChannel) adminChannel.send(`❌ Error saving new notice to DB: ${insertErr.message}`).catch(e => console.error("Error sending admin error:", e));
-                        });
-
-                    } else {
-                        this.debugConfig.log(`Notice from ${notice.source} ("${notice.title}") already announced. Skipping.`, 'scheduler', { noticeTitle: notice.title }, null, 'info');
+                    if (existingNotice.count > 0) {
+                        this.debugConfig.log(`Notice already announced: ${notice.title}`, 'scheduler', { title: notice.title });
+                        continue;
                     }
-                } catch (noticeProcessError) {
-                    this.debugConfig.log(`Error processing notice "${notice.title}":`, 'scheduler', null, noticeProcessError, 'error');
+
+                    this.debugConfig.log(`Processing new notice: ${notice.title}`, 'scheduler');
+
+                    const noticeEmbed = new EmbedBuilder()
+                        .setColor('#1E90FF')
+                        .setTitle(`Notice ${notice.id ? notice.id + ': ' : ''}${notice.title}`)
+                        .setURL(notice.link)
+                        .setFooter({ text: `Source: ${notice.source}` })
+                        .setTimestamp(new Date(notice.date));
+
+                    let allFilesForNotice = [];
+                    let description = 'A new notice has been published.';
+
+                    // Process attachments
+                    if (notice.attachments && notice.attachments.length > 0) {
+                        this.debugConfig.log(`Processing ${notice.attachments.length} attachments`, 'scheduler');
+                        
+                        for (const attachmentUrl of notice.attachments) {
+                            try {
+                                const fileName = path.basename(new URL(attachmentUrl).pathname);
+                                const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
+                                tempFilesOnDisk.push(tempFilePath);
+
+                                // Download attachment
+                                const response = await axios({
+                                    method: 'GET',
+                                    url: attachmentUrl,
+                                    responseType: 'stream',
+                                    timeout: 30000
+                                });
+
+                                const writer = createWriteStream(tempFilePath);
+                                response.data.pipe(writer);
+                                
+                                await new Promise((resolve, reject) => {
+                                    writer.on('finish', resolve);
+                                    writer.on('error', reject);
+                                });
+
+                                // Process PDF files
+                                if (fileName.toLowerCase().endsWith('.pdf')) {
+                                    await this._processPDFAttachment(fileName, tempFilePath, TEMP_ATTACHMENT_DIR, allFilesForNotice, tempFilesOnDisk);
+                                } else {
+                                    allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+                                    this.debugConfig.log(`Prepared attachment: ${fileName}`, 'scheduler', null, null, 'verbose');
+                                }
+                            } catch (downloadError) {
+                                this.debugConfig.log(`Error processing attachment ${attachmentUrl}`, 'scheduler', null, downloadError, 'error');
+                                description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
+                            }
+                        }
+                    }
+
+                    noticeEmbed.setDescription(description);
+
+                    // Send notices with attachment chunks
+                    await this._sendNoticeWithAttachments(noticeChannel, noticeEmbed, allFilesForNotice, notice.title);
+
+                    // Save to database
+                    await new Promise((resolve, reject) => {
+                        this.client.db.run(
+                            `INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
+                            [notice.title, notice.link, notice.date, Date.now()],
+                            (err) => {
+                                if (err) reject(err);
+                                else resolve();
+                            }
+                        );
+                    });
+
+                    this.debugConfig.log(`Successfully announced notice: ${notice.title}`, 'scheduler', null, null, 'success');
+
+                } catch (noticeError) {
+                    this.debugConfig.log(`Error processing notice: ${notice.title}`, 'scheduler', null, noticeError, 'error');
                     if (adminChannel) {
-                        await adminChannel.send(`❌ Error processing notice "${notice.title}": ${noticeProcessError.message}`).catch(e => console.error("Error sending admin error:", e));
+                        await adminChannel.send(`⚠️ Error processing notice "${notice.title}": ${noticeError.message}`).catch(() => {});
                     }
                 } finally {
+                    // Cleanup temp files
                     for (const filePath of tempFilesOnDisk) {
                         try {
                             await fsPromises.unlink(filePath);
-                            this.debugConfig.log(`Cleaned up temporary file: ${filePath}`, 'scheduler', { filePath }, null, 'verbose');
                         } catch (unlinkError) {
-                            this.debugConfig.log(`Error cleaning up temporary file ${filePath}:`, 'scheduler', null, unlinkError, 'warn');
+                            this.debugConfig.log(`Error cleaning up temp file: ${filePath}`, 'scheduler', null, unlinkError, 'warn');
                         }
                     }
                 }
             }
         } catch (error) {
-            this.debugConfig.log('Error during notice scraping or announcement:', 'scheduler', null, error, 'error');
+            this.debugConfig.log('Error during notice scraping', 'scheduler', null, error, 'error');
             if (adminChannel) {
-                await adminChannel.send(`❌ Notice scraping failed: ${error.message}`).catch(e => console.error("Error sending admin error:", e));
+                await adminChannel.send(`⚠️ Notice scraping failed: ${error.message}`).catch(() => {});
             }
         } finally {
-            await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(e => this.debugConfig.log('Error deleting temp directory after all notices processed:', 'scheduler', null, e, 'error'));
+            // Cleanup temp directory
+            await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(() => {});
         }
     }
 
     /**
-     * Announces birthdays for users in guilds.
+     * Processes PDF attachments by converting to images.
+     * @private
+     */
+    async _processPDFAttachment(fileName, tempFilePath, tempDir, allFiles, tempFilesOnDisk) {
+        const MAX_PDF_PAGES_TO_CONVERT = 10;
+        
+        try {
+            let totalPdfPages = 0;
+            
+            // Get PDF page count
+            try {
+                const pdfBuffer = await fsPromises.readFile(tempFilePath);
+                const uint8Array = new Uint8Array(pdfBuffer);
+                const loadingTask = getDocument({ data: uint8Array });
+                const pdfDocument = await loadingTask.promise;
+                totalPdfPages = pdfDocument.numPages;
+                this.debugConfig.log(`PDF ${fileName} has ${totalPdfPages} pages`, 'scheduler', null, null, 'verbose');
+            } catch (pdfjsError) {
+                this.debugConfig.log('Could not get PDF page count', 'scheduler', null, pdfjsError, 'warn');
+                totalPdfPages = MAX_PDF_PAGES_TO_CONVERT;
+            }
+
+            // Convert PDF to images
+            const pdfConvertOptions = {
+                density: 150,
+                quality: 90,
+                height: 1754,
+                width: 1240,
+                format: "png",
+                saveFilename: path.parse(fileName).name,
+                savePath: tempDir
+            };
+
+            const convert = fromPath(tempFilePath, pdfConvertOptions);
+            const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES_TO_CONVERT);
+            let pageConvertedCount = 0;
+
+            for (let pageNum = 1; pageNum <= pagesToConvert; pageNum++) {
+                try {
+                    const convertResponse = await convert(pageNum);
+                    if (convertResponse?.path) {
+                        const pngFilePath = convertResponse.path;
+                        const pngFileName = path.basename(pngFilePath);
+                        tempFilesOnDisk.push(pngFilePath);
+                        allFiles.push(new AttachmentBuilder(pngFilePath, { name: pngFileName }));
+                        pageConvertedCount++;
+                        this.debugConfig.log(`Converted PDF page ${pageNum} to PNG`, 'scheduler', null, null, 'verbose');
+                    } else {
+                        this.debugConfig.log(`No valid response for PDF page ${pageNum}`, 'scheduler', null, null, 'warn');
+                        break;
+                    }
+                } catch (pageError) {
+                    this.debugConfig.log(`Could not convert PDF page ${pageNum}`, 'scheduler', null, pageError, 'warn');
+                    if (pageError.message.includes('does not exist') || pageError.message.includes('invalid page number')) {
+                        break;
+                    }
+                }
+            }
+
+            if (pageConvertedCount === 0) {
+                this.debugConfig.log(`No pages converted for PDF ${fileName}. Sending original.`, 'scheduler', null, null, 'warn');
+                allFiles.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+            } else {
+                this.debugConfig.log(`Converted ${pageConvertedCount} of ${totalPdfPages} pages from ${fileName}`, 'scheduler');
+            }
+
+        } catch (pdfProcessError) {
+            this.debugConfig.log(`Error processing PDF ${fileName}`, 'scheduler', null, pdfProcessError, 'error');
+            allFiles.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
+        }
+    }
+
+    /**
+     * Sends notice with attachments, chunking if necessary.
+     * @private
+     */
+    async _sendNoticeWithAttachments(noticeChannel, embed, attachments, noticeTitle) {
+        const ATTACHMENT_LIMIT = 10;
+        
+        if (attachments.length === 0) {
+            await noticeChannel.send({ embeds: [embed] });
+            this.debugConfig.log(`Sent notice without attachments: ${noticeTitle}`, 'scheduler');
+            return;
+        }
+
+        let sentFirstMessage = false;
+        
+        for (let i = 0; i < attachments.length; i += ATTACHMENT_LIMIT) {
+            const chunk = attachments.slice(i, i + ATTACHMENT_LIMIT);
+            
+            try {
+                if (!sentFirstMessage) {
+                    await noticeChannel.send({ embeds: [embed], files: chunk });
+                    sentFirstMessage = true;
+                } else {
+                    await noticeChannel.send({
+                        content: `(Continued attachments for "${noticeTitle}")`,
+                        files: chunk
+                    });
+                }
+                
+                this.debugConfig.log(`Sent chunk of ${chunk.length} attachments for "${noticeTitle}"`, 'scheduler');
+            } catch (sendError) {
+                this.debugConfig.log(`Error sending notice chunk ${i / ATTACHMENT_LIMIT + 1}`, 'scheduler', null, sendError, 'error');
+                throw sendError; // Re-throw to be handled by caller
+            }
+        }
+    }
+
+    /**
+     * Enhanced birthday announcement system.
      * @private
      */
     async _announceBirthdays() {
-        this.debugConfig.log('Checking for birthdays...', 'scheduler', null, null, 'info');
+        this.debugConfig.log('Checking for birthdays...', 'scheduler');
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
-        if (!BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID || BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID === 'YOUR_BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID_HERE') {
-            this.debugConfig.log('BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID is not set or invalid. Birthday announcements disabled.', 'scheduler', null, null, 'warn');
+        
+        if (!BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID) {
+            this.debugConfig.log('Birthday announcement channel not configured', 'scheduler', null, null, 'warn');
             return;
         }
+
         let announcementChannel;
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
-            if (!announcementChannel || !(announcementChannel.type === ChannelType.GuildText || announcementChannel.type === ChannelType.GuildAnnouncement)) {
-                this.debugConfig.log(`Configured birthday channel not found or is not a text/announcement channel.`, 'scheduler', { channelId: BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID }, null, 'error');
+            if (!announcementChannel) {
+                this.debugConfig.log('Birthday announcement channel not found', 'scheduler', { channelId: BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID }, null, 'error');
                 return;
             }
         } catch (error) {
-            this.debugConfig.log(`Error fetching birthday announcement channel:`, 'scheduler', null, error, 'error');
+            this.debugConfig.log('Error fetching birthday channel', 'scheduler', null, error, 'error');
             return;
         }
+
         const today = new Date();
         const currentMonth = today.getMonth() + 1;
         const currentDay = today.getDate();
-        const guilds = this.client.guilds.cache;
-        for (const [guildId, guild] of guilds) {
+
+        for (const [, guild] of this.client.guilds.cache) {
             try {
-                const rows = await new Promise((resolve, reject) => {
-                    this.client.db.all(`SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
+                const birthdays = await new Promise((resolve, reject) => {
+                    this.client.db.all(
+                        `SELECT user_id, year FROM birthdays WHERE guild_id = ? AND month = ? AND day = ?`,
                         [guild.id, currentMonth, currentDay],
-                        (err, resultRows) => {
-                            if (err) {
-                                this.debugConfig.log(`Error fetching birthdays for guild ${guild.name} (${guild.id}):`, 'scheduler', null, err, 'error');
-                                return reject(err);
-                            }
-                            resolve(resultRows);
+                        (err, rows) => {
+                            if (err) reject(err);
+                            else resolve(rows || []);
                         }
                     );
                 });
-                if (rows.length > 0) {
-                    const birthdayUsers = [];
-                    let firstBirthdayUserAvatarUrl = null;
-                    for (const row of rows) {
-                        try {
-                            const member = await guild.members.fetch(row.user_id); 
-                            let ageString = '';
-                            if (row.year) {
-                                const age = today.getFullYear() - row.year;
-                                if (age >= 0) ageString = ` (turning ${age})`;
-                            }
-                            birthdayUsers.push(`• <@${member.user.id}>${ageString}`);
-                            if (!firstBirthdayUserAvatarUrl) {
-                                firstBirthdayUserAvatarUrl = member.user.displayAvatarURL({ dynamic: true, size: 128 });
-                            }
-                        } catch (fetchErr) {
-                            this.debugConfig.log(`Could not fetch birthday user ${row.user_id}):`, 'scheduler', null, fetchErr, 'warn');
-                            birthdayUsers.push(`• Unknown User (ID: ${row.user_id})`); 
-                        }
-                    }
-                    if (birthdayUsers.length > 0) {
-                        const authorName = `Free Students' Union, Pulchowk Campus - 2081`;
-                        const authorIconUrl = "https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&";
-                        const authorWebsiteUrl = "https://www.facebook.com/fsupulchowk";
 
-                        const birthdayEmbed = new EmbedBuilder()
-                            .setColor('#FFD700') 
-                            .setAuthor({
-                                name: authorName,
-                                iconURL: authorIconUrl,
-                                url: authorWebsiteUrl
-                            })
-                            .setTitle('🎂 Happy Birthday!')
-                            .setDescription(`🎉 Wishing a very happy birthday to our amazing community members:\n\n${birthdayUsers.join('\n')}\n\nMay you have a fantastic day filled with joy and celebration!`)
-                            .setImage('https://codaio.imgix.net/docs/Y_HFctSU9K/blobs/bl-4kLxBlt-8t/66dbaff27d8df6da40fc20009f59a885dca2e859e880d992e28c3096d08bd205041c9ea43d0ca891055d56e79864748a9564d1be896d57cc93bf6c57e6b25e879d80a6d5058a91ef3572aff7c0a3b9efb24f7f0d1daa0d170368b9686d674c81650fa247?auto=format%2Ccompress&fit=crop&w=1920&ar=4%3A1&crop=focalpoint&fp-x=0.5&fp-y=0.5&fp-z=1') // Festive image
-                            .setTimestamp();
+                if (birthdays.length === 0) continue;
 
-                        if (firstBirthdayUserAvatarUrl) {
-                            birthdayEmbed.setThumbnail(firstBirthdayUserAvatarUrl);
-                        } else {
-                            birthdayEmbed.setThumbnail('https://cdn.discordapp.com/attachments/712392381827121174/1396481277284323462/fsulogo.png?ex=687e3e09&is=687cec89&hm=6ce3866b2a68ba39b762c6dd3df8c57c64eecf980e09058768de325bf43246c2&');
-                        }
-                        await announcementChannel.send({ embeds: [birthdayEmbed] }).catch(e => this.debugConfig.log(`Error sending birthday announcement in guild ${guild.name} (${guild.id}):`, 'scheduler', null, e, 'error'));
-                        this.debugConfig.log(`Sent birthday announcement for guild ${guild.id}.`, 'scheduler', { guildId: guild.id }, null, 'info');
-                    } else {
-                        this.debugConfig.log(`No birthdays found for today in guild ${guild.name} (${guild.id}).`, 'scheduler', { guildId: guild.id }, null, 'info');
+                const birthdayUsers = [];
+                for (const birthday of birthdays) {
+                    try {
+                        const member = await guild.members.fetch(birthday.user_id);
+                        const ageString = birthday.year ? ` (turning ${today.getFullYear() - birthday.year})` : '';
+                        birthdayUsers.push(`• ${member}${ageString}`);
+                    } catch (memberError) {
+                        birthdayUsers.push(`• Unknown User (ID: ${birthday.user_id})`);
+                        this.debugConfig.log(`Could not fetch member for birthday: ${birthday.user_id}`, 'scheduler', null, memberError, 'warn');
                     }
                 }
-            } catch (guildError) {
-                this.debugConfig.log(`Error processing guild ${guild.name} (${guild.id}) for birthdays:`, 'scheduler', null, guildError, 'error');
-            }
-        }
-    }
 
-    /**
-     * Placeholder method for handling suggestion votes.
-     * You will need to implement the actual logic for updating votes in your database
-     * and refreshing the suggestion message. This method now primarily logs and
-     * ensures the interaction is handled.
-     * @param {import('discord.js').ButtonInteraction} interaction The button interaction.
-     * @private
-     */
-    async _handleSuggestionVote(interaction) {
-        this.debugConfig.log(`Handling suggestion vote for interaction ${interaction.customId}`, 'interaction', { interactionId: interaction.customId, user: interaction.user.tag }, null, 'info');
-        // The actual vote logic for updating DB/embeds is handled in _onMessageReactionAdd/Remove.
-        // This button handler is for a direct button vote, if implemented differently.
-        // For now, if a user clicks a button, we acknowledge it.
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: 'Your vote has been registered!', flags: [MessageFlags.Ephemeral] }).catch(e => this.debugConfig.log("Error replying to suggestion vote:", 'interaction', null, e, 'error'));
-        } else {
-            await interaction.editReply({ content: 'Your vote has been registered!' }).catch(e => this.debugConfig.log("Error editing reply for suggestion vote:", 'interaction', null, e, 'error'));
-        }
-    }
-
-    /**
-     * Handles suggestion deletion initiated via a button by prompting for a reason.
-     * @param {import('discord.js').ButtonInteraction} interaction The button interaction.
-     * @private
-     */
-    async _handleSuggestionDelete(interaction) {
-        this.debugConfig.log(`Handling suggestion delete for interaction ${interaction.customId}`, 'interaction', { interactionId: interaction.customId, user: interaction.user.tag }, null, 'info');
-
-        if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
-            return interaction.reply({ content: '❌ You do not have permission to delete suggestions.', flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to delete permission error:", e));
-        }
-
-        const suggestionId = interaction.customId.split('_')[2];
-
-        const modal = new ModalBuilder()
-            .setCustomId(`delete_reason_modal_${suggestionId}`)
-            .setTitle('Delete Suggestion');
-
-        const reasonInput = new TextInputBuilder()
-            .setCustomId('deleteReasonInput')
-            .setLabel('Reason for deleting this suggestion:')
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true)
-            .setPlaceholder('e.g., Duplicate, irrelevant, rule-breaking');
-
-        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
-
-        await interaction.showModal(modal).catch(e => this.debugConfig.log("Error showing delete reason modal:", 'interaction', null, e, 'error'));
-    }
-
-
-    /**
-     * Processes suggestion denial from a modal.
-     * This will mark a suggestion as denied, potentially notify the suggester, and update the message.
-     * @param {import('discord.js').ModalSubmitInteraction} interaction The modal submission interaction.
-     * @param {string} suggestionId The ID of the suggestion to deny.
-     * @param {string} reason The reason for denying the suggestion.
-     * @private
-     */
-    async _processSuggestionDenial(interaction, suggestionId, reason) {
-        this.debugConfig.log(`Processing denial for suggestion ${suggestionId} with reason: "${reason}"`, 'interaction', { suggestionId, reason, user: interaction.user.tag }, null, 'info');
-
-        try {
-            const suggestionRow = await new Promise((resolve, reject) => {
-                this.client.db.get(`SELECT message_id, user_id FROM suggestions WHERE id = ?`, [suggestionId], (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-
-            if (!suggestionRow) {
-                if (!interaction.replied && !interaction.deferred) {
-                    await interaction.reply({ content: `❌ Suggestion with ID \`${suggestionId}\` not found.`, flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to not found suggestion:", e));
-                } else {
-                    await interaction.editReply({ content: `❌ Suggestion with ID \`${suggestionId}\` not found.` }).catch(e => console.error("Error editing reply for not found suggestion:", e));
-                }
-                return;
-            }
-            await new Promise((resolve, reject) => {
-                this.client.db.run(`UPDATE suggestions SET status = 'denied', reason = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?`,
-                    [reason, interaction.user.id, Date.now(), suggestionId],
-                    (err) => {
-                        if (err) reject(err);
-                        else resolve();
-                    }
-                );
-            });
-            this.debugConfig.log(`Suggestion ${suggestionId} status updated to 'denied' in DB.`, 'interaction', { suggestionId }, null, 'info');
-            const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
-            if (suggestionsChannel) {
-                const message = await suggestionsChannel.messages.fetch(suggestionRow.message_id).catch(e => this.debugConfig.log(`Could not fetch suggestion message ${suggestionRow.message_id}:`, 'interaction', null, e, 'warn'));
-                if (message && message.embeds[0]) {
-                    const originalEmbed = EmbedBuilder.from(message.embeds[0]);
-                    const updatedEmbed = originalEmbed
-                        .setColor('#FF0000') 
-                        .spliceFields(originalEmbed.fields.length - 1, 1, { name: 'Status', value: `Denied by ${interaction.user.tag}\nReason: ${reason}` }); // Update last field or add new
-                    await message.edit({ embeds: [updatedEmbed], components: [] }).catch(e => this.debugConfig.log("Error editing suggestion message after denial:", 'interaction', null, e, 'error'));
-                    this.debugConfig.log(`Suggestion message ${suggestionRow.message_id} updated with 'denied' status.`, 'interaction', { messageId: suggestionRow.message_id }, null, 'info');
-                }
-            }
-            try {
-                const suggester = await this.client.users.fetch(suggestionRow.user_id);
-                if (suggester) {
-                    const dmEmbed = new EmbedBuilder()
-                        .setColor('#FF0000')
-                        .setTitle(`Your Suggestion Was Denied ❌`)
-                        .setDescription(`Your suggestion (ID: ${suggestionId}) in ${interaction.guild.name} has been denied.`)
-                        .addFields(
-                            { name: 'Reason', value: reason },
-                            { name: 'Original Suggestion', value: `[Click here to view](${suggestionRow.message_id ? `https://discord.com/channels/${interaction.guild.id}/${process.env.SUGGESTIONS_CHANNEL_ID}/${suggestionRow.message_id}` : 'Not available'})` }
-                        )
+                if (birthdayUsers.length > 0) {
+                    const birthdayEmbed = new EmbedBuilder()
+                        .setColor('#FFD700')
+                        .setTitle('🎂 Happy Birthday!')
+                        .setDescription(`🎉 Wishing a very happy birthday to:\n\n${birthdayUsers.join('\n')}`)
                         .setTimestamp();
-                    await suggester.send({ embeds: [dmEmbed] }).catch(e => this.debugConfig.log(`Could not DM suggester ${suggester.tag} about denial:`, 'interaction', null, e, 'warn'));
-                    this.debugConfig.log(`DM sent to suggester ${suggester.tag} about denial.`, 'interaction', { suggesterId: suggester.id }, null, 'info');
+
+                    await announcementChannel.send({ embeds: [birthdayEmbed] });
+                    this.debugConfig.log(`Sent birthday announcement for ${birthdayUsers.length} users in ${guild.name}`, 'scheduler');
                 }
-            } catch (dmError) {
-                this.debugConfig.log(`Error fetching suggester or sending denial DM:`, 'interaction', null, dmError, 'warn');
-            }
-
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: `✅ Suggestion \`${suggestionId}\` has been denied.`, flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to denial success:", e));
-            } else {
-                await interaction.editReply({ content: `✅ Suggestion \`${suggestionId}\` has been denied.` }).catch(e => console.error("Error editing reply for denial success:", e));
-            }
-
-        } catch (error) {
-            this.debugConfig.log(`An error occurred while processing suggestion denial for ${suggestionId}:`, 'interaction', null, error, 'error');
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: `❌ An error occurred while denying suggestion \`${suggestionId}\`.`, flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to denial error:", e));
-            } else {
-                await interaction.editReply({ content: `❌ An error occurred while denying suggestion \`${suggestionId}\`.` }).catch(e => console.error("Error editing reply for denial error:", e));
+            } catch (error) {
+                this.debugConfig.log(`Error processing birthdays for guild ${guild.id}`, 'scheduler', { guildId: guild.id }, error, 'error');
             }
         }
     }
 
-
     /**
-     * Processes suggestion deletion from a modal.
-     * This will delete the suggestion from the database and Discord message.
-     * @param {import('discord.js').ModalSubmitInteraction} interaction The modal submission interaction.
-     * @param {string} suggestionId The ID of the suggestion to delete.
-     * @param {string} reason The reason for deleting the suggestion.
-     * @private
-     */
-    async _processSuggestionDelete(interaction, suggestionId, reason) {
-        this.debugConfig.log(`Processing deletion from modal for suggestion ${suggestionId} with reason: "${reason}"`, 'interaction', { suggestionId, reason, user: interaction.user.tag }, null, 'info');
-
-        try {
-            const suggestionRow = await new Promise((resolve, reject) => {
-                this.client.db.get(`SELECT message_id, user_id FROM suggestions WHERE id = ?`, [suggestionId], (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-
-            if (!suggestionRow) {
-                if (!interaction.replied && !interaction.deferred) {
-                    await interaction.reply({ content: `❌ Suggestion with ID \`${suggestionId}\` not found.`, flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to delete not found:", e));
-                } else {
-                    await interaction.editReply({ content: `❌ Suggestion with ID \`${suggestionId}\` not found.` }).catch(e => console.error("Error editing reply for delete not found:", e));
-                }
-                return;
-            }
-            await new Promise((resolve, reject) => {
-                this.client.db.run(`DELETE FROM suggestions WHERE id = ?`, [suggestionId], (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                });
-            });
-            this.debugConfig.log(`Suggestion ${suggestionId} deleted from DB.`, 'interaction', { suggestionId }, null, 'info');
-            const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
-            if (suggestionsChannel && suggestionRow.message_id) {
-                const message = await suggestionsChannel.messages.fetch(suggestionRow.message_id).catch(e => this.debugConfig.log(`Could not fetch suggestion message ${suggestionRow.message_id} for deletion:`, 'interaction', null, e, 'warn'));
-                if (message) {
-                    await message.delete(`Suggestion deleted by ${interaction.user.tag}. Reason: ${reason}`).catch(e => this.debugConfig.log("Error deleting suggestion message:", 'interaction', null, e, 'error'));
-                    this.debugConfig.log(`Suggestion message ${suggestionRow.message_id} deleted from Discord.`, 'interaction', { messageId: suggestionRow.message_id }, null, 'info');
-                }
-            }
-            try {
-                const suggester = await this.client.users.fetch(suggestionRow.user_id);
-                if (suggester) {
-                    const dmEmbed = new EmbedBuilder()
-                        .setColor('#FF0000')
-                        .setTitle(`Your Suggestion Was Deleted 🗑️`)
-                        .setDescription(`Your suggestion (ID: ${suggestionId}) in ${interaction.guild.name} has been deleted by a moderator.`)
-                        .addFields(
-                            { name: 'Reason', value: reason }
-                        )
-                        .setTimestamp();
-                    await suggester.send({ embeds: [dmEmbed] }).catch(e => this.debugConfig.log(`Could not DM suggester ${suggester.tag} about deletion:`, 'interaction', null, e, 'warn'));
-                    this.debugConfig.log(`DM sent to suggester ${suggester.tag} about deletion.`, 'interaction', { suggesterId: suggester.id }, null, 'info');
-                }
-            } catch (dmError) {
-                this.debugConfig.log(`Error fetching suggester or sending deletion DM:`, 'interaction', null, dmError, 'warn');
-            }
-
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: `✅ Suggestion \`${suggestionId}\` has been deleted.`, flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to delete success:", e));
-            } else {
-                await interaction.editReply({ content: `✅ Suggestion \`${suggestionId}\` has been deleted.` }).catch(e => console.error("Error editing reply for delete success:", e));
-            }
-
-        } catch (error) {
-            this.debugConfig.log(`An error occurred while processing suggestion deletion for ${suggestionId}:`, 'interaction', null, error, 'error');
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: `❌ An error occurred while deleting suggestion \`${suggestionId}\`.`, flags: [MessageFlags.Ephemeral] }).catch(e => console.error("Error replying to delete error:", e));
-            } else {
-                await interaction.editReply({ content: `❌ An error occurred while deleting suggestion \`${suggestionId}\`.` }).catch(e => console.error("Error editing reply for delete error:", e));
-            }
-        }
-    }
-
-
-    /**
-     * Starts the bot by logging into Discord.
+     * Starts the bot with enhanced error handling.
      */
     async start() {
-        this.debugConfig.log('Starting bot...', 'init', null, null, 'info');
-        await writeServiceAccountKey();
+        this.debugConfig.log('Starting bot...', 'init');
+        
         try {
+            await writeServiceAccountKey();
             await this.client.login(this.token);
-            this.debugConfig.log('Client login successful.', 'init', null, null, 'success');
+            this.debugConfig.log('Bot started successfully', 'init', null, null, 'success');
         } catch (error) {
-            this.debugConfig.log('Client login failed.', 'init', null, error, 'error');
-            exit(1);
+            this.debugConfig.log('Failed to start bot', 'init', null, error, 'error');
+            console.error('Critical startup error:', error);
+            process.exit(1);
+        }
+    }
+
+    /**
+     * Graceful shutdown handler.
+     */
+    async shutdown() {
+        this.debugConfig.log('Initiating bot shutdown...', 'shutdown');
+        
+        try {
+            // Clear all scheduled jobs
+            schedule.gracefulShutdown();
+            
+            // Close database connection
+            if (this.client.db) {
+                this.client.db.close();
+            }
+            
+            // Destroy Discord client
+            this.client.destroy();
+            
+            this.debugConfig.log('Bot shutdown completed', 'shutdown', null, null, 'success');
+        } catch (error) {
+            this.debugConfig.log('Error during shutdown', 'shutdown', null, error, 'error');
         }
     }
 }
 
+// ===================================================================================
+// == MAIN INITIALIZATION ============================================================
+// ===================================================================================
+
 async function main() {
     try {
+        debugConfig.log('Initializing application...', 'init');
+        
+        const requiredEnvVars = ['BOT_TOKEN', 'CLIENT_ID'];
+        const missing = requiredEnvVars.filter(varName => !process.env[varName]);
+        
+        if (missing.length > 0) {
+            throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+        }
+
         const database = await initializeDatabase();
+        debugConfig.log('Database initialized successfully', 'init');
+
         const bot = new PulchowkBot(process.env.BOT_TOKEN, database);
+        
+        process.on('SIGINT', async () => {
+            debugConfig.log('Received SIGINT signal, shutting down gracefully...', 'shutdown');
+            await bot.shutdown();
+            process.exit(0);
+        });
+
+        process.on('SIGTERM', async () => {
+            debugConfig.log('Received SIGTERM signal, shutting down gracefully...', 'shutdown');
+            await bot.shutdown();
+            process.exit(0);
+        });
+
         await bot.start();
+        
     } catch (error) {
-        debugConfig.log('Failed to start bot:', 'init', null, error, 'error');
-        console.error(error);
-        exit(1);
+        debugConfig.log('Critical application error', 'init', null, error, 'error');
+        console.error('Application failed to start:', error);
+        process.exit(1);
     }
 }
 

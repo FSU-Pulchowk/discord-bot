@@ -15,6 +15,7 @@ import dotenv from 'dotenv';
 import { db } from '../../database.js';
 
 dotenv.config();
+const emailClient = new emailService();
 
 const otpEmailTemplate = `
 <!DOCTYPE html>
@@ -190,6 +191,23 @@ const otpEmailTemplate = `
 
 const otpCache = new Map();
 
+// Debug function to help troubleshoot
+function debugOtpCache(context = '') {
+    console.log(`=== OTP Cache Debug (${context}) ===`);
+    console.log('Cache size:', otpCache.size);
+    for (const [userId, data] of otpCache.entries()) {
+        console.log(`User ${userId}:`, {
+            otp: data.otp,
+            email: data.email,
+            realName: data.realName,
+            expiresAt: new Date(data.expiresAt).toISOString(),
+            isExpired: Date.now() > data.expiresAt,
+            timeRemaining: Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000)) + 's'
+        });
+    }
+    console.log('===============================');
+}
+
 export const data = new SlashCommandBuilder()
     .setName('verify')
     .setDescription('Start the verification process to gain access to verified channels.')
@@ -197,9 +215,6 @@ export const data = new SlashCommandBuilder()
 
 /**
  * Creates and returns the initial verification modal.
- * This modal collects the user's real name, college email, and birthdate.
- * It's a reusable function for both slash command and button interactions.
- * @returns {ModalBuilder} The Discord modal for verification input.
  */
 function createVerifyModal() {
     const modal = new ModalBuilder()
@@ -243,11 +258,11 @@ function createVerifyModal() {
 
 /**
  * Executes the /verify slash command.
- * It checks if the user is already verified and then presents the verification modal.
- * Handles both guild and DM interactions by fetching member data from GUILD_ID.
- * @param {import('discord.js').ChatInputCommandInteraction} interaction - The interaction object.
  */
 export async function execute(interaction) {
+    console.log('=== /verify command executed ===');
+    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    
     let guildToVerifyFor = null;
     let memberInGuild = null;
 
@@ -284,54 +299,77 @@ export async function execute(interaction) {
 
 /**
  * Handles a button interaction to show the initial verification modal.
- * This allows a button (e.g., "Start Verification") to trigger the same modal as the /verify command.
- * @param {import('discord.js').ButtonInteraction} interaction - The button interaction object.
  */
 export async function handleButtonInteraction(interaction) {
+    console.log('=== handleButtonInteraction (verify) ===');
+    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    console.log('CustomId:', interaction.customId);
+    
     let guildToVerifyFor = null;
     let memberInGuild = null;
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
     const GUILD_ID = process.env.GUILD_ID;
 
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
-        await interaction.reply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ 
+            content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.', 
+            flags: [MessageFlags.Ephemeral] 
+        });
         return; 
     }
 
     if (!GUILD_ID || GUILD_ID === 'YOUR_GUILD_ID_HERE') {
-        await interaction.reply({ content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ 
+            content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.', 
+            flags: [MessageFlags.Ephemeral] 
+        });
         return;
     }
+
     try {
         guildToVerifyFor = await interaction.client.guilds.fetch(GUILD_ID);
         memberInGuild = await guildToVerifyFor.members.fetch(interaction.user.id);
 
         if (!memberInGuild) {
-            await interaction.reply({ content: `❌ You must be a member of the main server (${guildToVerifyFor.name}) to use this button. Please join the server first.`, flags: [MessageFlags.Ephemeral] });
+            await interaction.reply({ 
+                content: `❌ You must be a member of the main server (${guildToVerifyFor.name}) to use this button. Please join the server first.`, 
+                flags: [MessageFlags.Ephemeral] 
+            });
             return; 
         }
     } catch (error) {
         console.error(`Error fetching guild or member for DM button verification:`, error);
-        await interaction.reply({ content: '❌ Could not determine your membership in the main server. Please ensure you are in the server and try again later.', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ 
+            content: '❌ Could not determine your membership in the main server. Please ensure you are in the server and try again later.', 
+            flags: [MessageFlags.Ephemeral] 
+        });
         return; 
     }
 
     if (memberInGuild.roles.cache.has(VERIFIED_ROLE_ID)) {
-        await interaction.reply({ content: '✅ You are already verified!', flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ 
+            content: '✅ You are already verified!', 
+            flags: [MessageFlags.Ephemeral] 
+        });
         return; 
     }
+
+    // Show the verification modal
     const modal = createVerifyModal();
     await interaction.showModal(modal);
 }
 
 /**
  * Handles the submission of the verification modal ('verifyModal').
- * This function is called by the bot's main interaction handler when the modal is submitted.
- * It validates input, generates an OTP, sends it via email, and prompts the user for confirmation.
- * @param {import('discord.js').ModalSubmitInteraction} interaction - The modal submit interaction object.
  */
 export async function handleModalSubmit(interaction) {
-    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); // Use MessageFlags.Ephemeral
+    console.log('=== handleModalSubmit (verify) ===');
+    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    
+    // Debug cache state before processing
+    debugOtpCache('before modal processing');
+    
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const realName = interaction.fields.getTextInputValue('realNameInput');
     const email = interaction.fields.getTextInputValue('collegeEmailInput');
@@ -341,28 +379,32 @@ export async function handleModalSubmit(interaction) {
     const guildId = process.env.GUILD_ID;
     const discordUsername = interaction.user.tag;
 
+    console.log('Form data:', { realName, email, birthdateString, userId });
+
+    // Validation (without clearing cache on errors)
     if (!email.endsWith('@pcampus.edu.np')) {
-        otpCache.delete(userId);
+        console.log('Email validation failed - NOT clearing cache');
         return await interaction.editReply({ content: '❌ Please use your official Pulchowk Campus email address (@pcampus.edu.np).' });
     }
 
     const birthdateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!birthdateRegex.test(birthdateString)) {
-        otpCache.delete(userId);
+        console.log('Birthdate format validation failed - NOT clearing cache');
         return await interaction.editReply({ content: '❌ Please enter your birthdate in YYYY-MM-DD format (e.g., 2000-01-15).' });
     }
 
     const [year, month, day] = birthdateString.split('-').map(Number);
     const date = new Date(year, month - 1, day);
     if (isNaN(date.getTime()) || date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) {
-        otpCache.delete(userId);
+        console.log('Birthdate value validation failed - NOT clearing cache');
         return await interaction.editReply({ content: '❌ The birthdate you entered is not valid. Please check the month, day, and year.' });
     }
 
+    // Generate OTP and store in cache
     const otp = generateOtp();
-    const otpExpiresAt = Date.now() + 5 * 60 * 1000;
+    const otpExpiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes from now
 
-    otpCache.set(userId, {
+    const otpData = {
         otp,
         realName,
         email,
@@ -370,15 +412,34 @@ export async function handleModalSubmit(interaction) {
         guildId: guildId,
         discordUsername,
         expiresAt: otpExpiresAt,
-    });
+    };
+
+    // Store in cache BEFORE attempting to send email
+    otpCache.set(userId, otpData);
+    console.log(`OTP stored in cache for user ${userId}: ${otp}`);
+    console.log(`OTP expires at: ${new Date(otpExpiresAt).toISOString()}`);
+    
+    // Debug cache state after storing OTP
+    debugOtpCache('after storing OTP');
 
     try {
+        // Try to send email
         const emailSubject = 'FSU: Your One-Time Password (OTP) for Pulchowk Campus Verification';
         const emailHtmlContent = otpEmailTemplate
             .replace('{{OTP_CODE}}', otp)
             .replace('{{USER_REAL_NAME}}', realName); 
-        await emailService.sendEmail(email, emailSubject, emailHtmlContent);
 
+        let emailSent = false;
+        try {
+            await emailClient.sendEmail(email, emailSubject, emailHtmlContent);
+            emailSent = true;
+            console.log(`Email sent successfully to ${email}`);
+        } catch (emailError) {
+            console.error("Error sending verification email:", emailError);
+            // Don't throw here - we'll still allow manual OTP entry
+        }
+
+        // Create button for OTP entry (always create this, regardless of email success)
         const confirmButton = new ButtonBuilder()
             .setCustomId(`confirm_otp_button_${userId}_${Date.now()}`)
             .setLabel('Enter OTP')
@@ -386,21 +447,40 @@ export async function handleModalSubmit(interaction) {
 
         const row = new ActionRowBuilder().addComponents(confirmButton);
 
+        // Customize message based on email success
+        let responseMessage = `✅ An OTP has been generated for **${email}**.`;
+        if (emailSent) {
+            responseMessage += ` Please check your inbox (and spam folder).`;
+        } else {
+            responseMessage += ` ⚠️ There was an issue sending the email, but you can still enter your OTP manually if you received it.`;
+        }
+        responseMessage += `\n\nClick the button below to enter your OTP, or use \`/confirmotp <your_otp>\`.`;
+
         await interaction.editReply({
-            content: `✅ An OTP has been sent to **${email}**. Please check your inbox (and spam folder).\n\nClick the button below to enter your OTP, or use \`/confirmotp <your_otp>\`.`,
+            content: responseMessage,
             components: [row]
         });
 
+        console.log('Response sent to user, OTP should be in cache');
+        debugOtpCache('after sending response');
+
     } catch (error) {
-        console.error('Error during verification modal submission or email sending:', error);
+        console.error('Critical error during verification process:', error);
+        // Only clear cache on truly critical errors
         otpCache.delete(userId);
-        await interaction.editReply({ content: '❌ Failed to send OTP. Please ensure your email is correct and try again later. If the issue persists, contact an admin.' });
+        console.log('Cache cleared due to critical error');
+        await interaction.editReply({ 
+            content: '❌ A critical error occurred during verification. Please try the `/verify` command again. If the issue persists, contact an admin.' 
+        });
     }
 }
 
 export function getOtpCache() {
     return otpCache;
 }
+
+// Export debug function for troubleshooting
+export { debugOtpCache };
 
 export async function saveBirthday(userId, guildId, birthdate, setBy) {
     const { year, month, day } = birthdate;

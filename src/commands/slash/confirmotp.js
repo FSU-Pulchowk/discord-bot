@@ -6,9 +6,10 @@ import {
     TextInputStyle,
     EmbedBuilder,
     PermissionsBitField,
-    MessageFlags 
+    MessageFlags,
+    ChannelType
 } from 'discord.js';
-import { getOtpCache, saveVerifiedUser, saveBirthday } from './verify.js';
+import { getOtpCache, saveVerifiedUser, saveBirthday, debugOtpCache } from './verify.js';
 import dotenv from 'dotenv';
 import { db } from '../../database.js';
 
@@ -28,17 +29,20 @@ export const data = new SlashCommandBuilder()
 
 /**
  * Core logic for processing OTP confirmation, whether from slash command or modal submission.
- * This is a private helper function within this module.
- * @param {import('discord.js').ChatInputCommandInteraction | import('discord.js').ModalSubmitInteraction} interaction - The interaction object.
- * @param {string} enteredOtp - The OTP entered by the user.
  */
 async function _processOtpConfirmation(interaction, enteredOtp) {
+    console.log('=== _processOtpConfirmation ===');
+    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    console.log('Entered OTP:', enteredOtp);
+    
+    // Debug cache state
+    debugOtpCache('at start of OTP confirmation');
+    
     const userOtpData = getOtpCache().get(interaction.user.id);
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
     const GUILD_ID = process.env.GUILD_ID;
 
-    // For slash commands, defer immediately. For modal submissions, they are already deferred by bot.js.
-    // NOTE: The deferral for modal submissions is now handled directly in handleModalSubmit.
+    // For slash commands, defer immediately. For modal submissions, they are already deferred.
     if (interaction.isChatInputCommand() && !interaction.deferred && !interaction.replied) {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
     }
@@ -52,18 +56,32 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
         }
 
         if (!userOtpData) {
+            console.log('No OTP data found in cache for user:', interaction.user.id);
+            debugOtpCache('when OTP data not found');
             return await interaction.editReply({ content: '❌ No pending verification found. Please use the `/verify` command first to get an OTP.' });
         }
 
-        const OTP_EXPIRATION_TIME_MS = 5 * 60 * 1000;
-        if (Date.now() - userOtpData.expiresAt > OTP_EXPIRATION_TIME_MS) {
+        console.log('Found OTP data:', {
+            storedOtp: userOtpData.otp,
+            enteredOtp: enteredOtp,
+            expiresAt: new Date(userOtpData.expiresAt).toISOString(),
+            isExpired: Date.now() > userOtpData.expiresAt
+        });
+
+        // Check if OTP has expired
+        if (Date.now() > userOtpData.expiresAt) {
+            console.log('OTP has expired');
             getOtpCache().delete(interaction.user.id);
             return await interaction.editReply({ content: '❌ Your OTP has expired. Please use the `/verify` command again to get a new one.' });
         }
 
+        // Check if OTP matches
         if (enteredOtp !== userOtpData.otp) {
+            console.log('OTP mismatch:', { entered: enteredOtp, expected: userOtpData.otp });
             return await interaction.editReply({ content: '❌ Incorrect OTP. Please try again.' });
         }
+
+        console.log('OTP is valid, proceeding with verification...');
 
         const guildId = userOtpData.guildId;
         let targetGuild;
@@ -101,8 +119,11 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
             return await interaction.editReply({ content: '❌ My role is not high enough to assign the verified role. Please contact an administrator.' });
         }
 
+        // Assign verified role
         await memberToVerify.roles.add(verifiedRole, 'User verification via OTP');
+        console.log(`Assigned verified role to ${memberToVerify.user.tag}`);
 
+        // Save to database
         await saveVerifiedUser(
             interaction.user.id,
             guildId,
@@ -118,7 +139,9 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
             interaction.user.id
         );
 
+        // Clear OTP cache after successful verification
         getOtpCache().delete(interaction.user.id);
+        console.log('OTP cache cleared after successful verification');
 
         const successEmbed = new EmbedBuilder()
             .setColor('#00FF00')
@@ -131,6 +154,7 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
 
         await interaction.editReply({ embeds: [successEmbed], components: [] });
 
+        // Send log to verification channel if configured
         const VERIFICATION_LOG_CHANNEL_ID = process.env.VERIFICATION_LOG_CHANNEL_ID;
         if (VERIFICATION_LOG_CHANNEL_ID) {
             try {
@@ -161,7 +185,6 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
 
 /**
  * Executes the /confirmotp slash command.
- * @param {import('discord.js').ChatInputCommandInteraction} interaction - The interaction object.
  */
 export async function execute(interaction) {
     const enteredOtp = interaction.options.getString('otp');
@@ -170,15 +193,28 @@ export async function execute(interaction) {
 
 /**
  * Handles the click of the "Enter OTP" button.
- * Presents a modal to the user to enter the OTP.
- * @param {import('discord.js').ButtonInteraction} interaction - The button interaction object.
  */
 export async function handleButtonInteraction(interaction) {
-    // The interaction is explicitly NOT deferred in bot.js for this button type,
-    // allowing showModal to be the initial response.
+    console.log('=== handleButtonInteraction (confirmotp) ===');
+    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    console.log('CustomId:', interaction.customId);
+    
+    // Debug cache state when button is clicked
+    debugOtpCache('when OTP button clicked');
 
-    // Corrected index to get the userId from the customId
-    const expectedUserId = interaction.customId.split('_')[3]; 
+    // Parse customId: confirm_otp_button_${userId}_${timestamp}
+    const customIdParts = interaction.customId.split('_');
+    console.log('CustomId parts:', customIdParts);
+    
+    if (customIdParts.length < 4) {
+        console.log('Invalid customId format');
+        return await interaction.reply({ 
+            content: '❌ Invalid button. Please use the `/verify` command again.', 
+            flags: [MessageFlags.Ephemeral] 
+        });
+    }
+    
+    const expectedUserId = customIdParts[3]; // Index 3 should be the userId
     console.log(`Expected User ID from customId: ${expectedUserId}`);
     console.log(`Interaction User ID: ${interaction.user.id}`);
 
@@ -188,14 +224,19 @@ export async function handleButtonInteraction(interaction) {
 
     const userOtpData = getOtpCache().get(interaction.user.id);
     if (!userOtpData) {
+        console.log('No OTP data found when button clicked');
+        debugOtpCache('when no OTP data found for button');
         return await interaction.reply({ content: '❌ No pending verification found. Please use the `/verify` command first to get an OTP.', flags: [MessageFlags.Ephemeral] });
     }
     
-    const OTP_EXPIRATION_TIME_MS = 5 * 60 * 1000;
-    if (Date.now() - userOtpData.expiresAt > OTP_EXPIRATION_TIME_MS) {
+    // Check if OTP expired
+    if (Date.now() > userOtpData.expiresAt) {
+        console.log('OTP expired when button clicked');
         getOtpCache().delete(interaction.user.id);
         return await interaction.reply({ content: '❌ Your OTP has expired. Please use the `/verify` command again to get a new one.', flags: [MessageFlags.Ephemeral] });
     }
+
+    console.log('OTP data found, showing modal');
 
     const modal = new ModalBuilder()
         .setCustomId('confirmOtpModal')
@@ -218,11 +259,11 @@ export async function handleButtonInteraction(interaction) {
 
 /**
  * Handles the submission of the confirm OTP modal ('confirmOtpModal').
- * Processes the entered OTP and completes verification.
- * This function is called by the bot's main interaction handler when the modal is submitted.
- * @param {import('discord.js').ModalSubmitInteraction} interaction - The modal submit interaction object.
  */
 export async function handleModalSubmit(interaction) {
+    console.log('=== handleModalSubmit (confirmotp) ===');
+    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const enteredOtp = interaction.fields.getTextInputValue('otpInput');
