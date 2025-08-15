@@ -13,6 +13,7 @@ import { emailService } from '../../services/emailService.js';
 import { generateOtp } from '../../utils/otpGenerator.js';
 import dotenv from 'dotenv';
 import { db } from '../../database.js';
+import { log } from '../../utils/debug.js'; // Import the log function
 
 dotenv.config();
 const emailClient = new emailService();
@@ -193,19 +194,18 @@ const otpCache = new Map();
 
 // Debug function to help troubleshoot
 function debugOtpCache(context = '') {
-    console.log(`=== OTP Cache Debug (${context}) ===`);
-    console.log('Cache size:', otpCache.size);
-    for (const [userId, data] of otpCache.entries()) {
-        console.log(`User ${userId}:`, {
+    log(`OTP Cache Debug (${context})`, 'verify', {
+        cacheSize: otpCache.size,
+        cacheContents: Array.from(otpCache.entries()).map(([userId, data]) => ({
+            userId,
             otp: data.otp,
             email: data.email,
             realName: data.realName,
             expiresAt: new Date(data.expiresAt).toISOString(),
             isExpired: Date.now() > data.expiresAt,
             timeRemaining: Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000)) + 's'
-        });
-    }
-    console.log('===============================');
+        }))
+    }, null, 'verbose');
 }
 
 export const data = new SlashCommandBuilder()
@@ -260,8 +260,10 @@ function createVerifyModal() {
  * Executes the /verify slash command.
  */
 export async function execute(interaction) {
-    console.log('=== /verify command executed ===');
-    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    log('[/verify] command executed', 'command', {
+        userTag: interaction.user.tag,
+        userId: interaction.user.id
+    });
     
     let guildToVerifyFor = null;
     let memberInGuild = null;
@@ -270,10 +272,12 @@ export async function execute(interaction) {
     const GUILD_ID = process.env.GUILD_ID;
 
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
+        log('Verification not configured: VERIFIED_ROLE_ID missing', 'error', null, new Error('VERIFIED_ROLE_ID is missing'));
         return interaction.reply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
     }
 
     if (!GUILD_ID || GUILD_ID === 'YOUR_GUILD_ID_HERE') {
+        log('Verification not configured: GUILD_ID missing', 'error', null, new Error('GUILD_ID is missing'));
         return interaction.reply({ content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.', flags: [MessageFlags.Ephemeral] });
     }
 
@@ -282,14 +286,16 @@ export async function execute(interaction) {
         memberInGuild = await guildToVerifyFor.members.fetch(interaction.user.id);
 
         if (!memberInGuild) {
+            log('User not a member of main server', 'warn', { userId: interaction.user.id, guildName: guildToVerifyFor.name });
             return interaction.reply({ content: `❌ You must be a member of the main server (${guildToVerifyFor.name}) to use this command. Please join the server first.`, flags: [MessageFlags.Ephemeral] });
         }
     } catch (error) {
-        console.error(`Error fetching guild or member for verification:`, error);
+        log('Error fetching guild or member for verification', 'error', { userId: interaction.user.id, guildId: GUILD_ID }, error);
         return interaction.reply({ content: '❌ Could not determine your membership in the main server. Please ensure you are in the server and try again later.', flags: [MessageFlags.Ephemeral] });
     }
 
     if (memberInGuild.roles.cache.has(VERIFIED_ROLE_ID)) {
+        log('User already verified', 'info', { userId: interaction.user.id });
         return interaction.reply({ content: '✅ You are already verified!', flags: [MessageFlags.Ephemeral] });
     }
 
@@ -301,9 +307,11 @@ export async function execute(interaction) {
  * Handles a button interaction to show the initial verification modal.
  */
 export async function handleButtonInteraction(interaction) {
-    console.log('=== handleButtonInteraction (verify) ===');
-    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
-    console.log('CustomId:', interaction.customId);
+    log('handleButtonInteraction (verify)', 'interaction', {
+        userTag: interaction.user.tag,
+        userId: interaction.user.id,
+        customId: interaction.customId
+    });
     
     let guildToVerifyFor = null;
     let memberInGuild = null;
@@ -311,6 +319,7 @@ export async function handleButtonInteraction(interaction) {
     const GUILD_ID = process.env.GUILD_ID;
 
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
+        log('Verification not configured: VERIFIED_ROLE_ID missing', 'error', null, new Error('VERIFIED_ROLE_ID is missing'));
         await interaction.reply({ 
             content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.', 
             flags: [MessageFlags.Ephemeral] 
@@ -319,6 +328,7 @@ export async function handleButtonInteraction(interaction) {
     }
 
     if (!GUILD_ID || GUILD_ID === 'YOUR_GUILD_ID_HERE') {
+        log('Verification not configured: GUILD_ID missing', 'error', null, new Error('GUILD_ID is missing'));
         await interaction.reply({ 
             content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.', 
             flags: [MessageFlags.Ephemeral] 
@@ -331,6 +341,7 @@ export async function handleButtonInteraction(interaction) {
         memberInGuild = await guildToVerifyFor.members.fetch(interaction.user.id);
 
         if (!memberInGuild) {
+            log('User not a member of main server', 'warn', { userId: interaction.user.id, guildName: guildToVerifyFor.name });
             await interaction.reply({ 
                 content: `❌ You must be a member of the main server (${guildToVerifyFor.name}) to use this button. Please join the server first.`, 
                 flags: [MessageFlags.Ephemeral] 
@@ -338,7 +349,7 @@ export async function handleButtonInteraction(interaction) {
             return; 
         }
     } catch (error) {
-        console.error(`Error fetching guild or member for DM button verification:`, error);
+        log('Error fetching guild or member for DM button verification', 'error', { userId: interaction.user.id, guildId: GUILD_ID }, error);
         await interaction.reply({ 
             content: '❌ Could not determine your membership in the main server. Please ensure you are in the server and try again later.', 
             flags: [MessageFlags.Ephemeral] 
@@ -347,6 +358,7 @@ export async function handleButtonInteraction(interaction) {
     }
 
     if (memberInGuild.roles.cache.has(VERIFIED_ROLE_ID)) {
+        log('User already verified via button interaction', 'info', { userId: interaction.user.id });
         await interaction.reply({ 
             content: '✅ You are already verified!', 
             flags: [MessageFlags.Ephemeral] 
@@ -363,8 +375,10 @@ export async function handleButtonInteraction(interaction) {
  * Handles the submission of the verification modal ('verifyModal').
  */
 export async function handleModalSubmit(interaction) {
-    console.log('=== handleModalSubmit (verify) ===');
-    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    log('handleModalSubmit (verify)', 'interaction', {
+        userTag: interaction.user.tag,
+        userId: interaction.user.id
+    });
     
     // Debug cache state before processing
     debugOtpCache('before modal processing');
@@ -379,24 +393,24 @@ export async function handleModalSubmit(interaction) {
     const guildId = process.env.GUILD_ID;
     const discordUsername = interaction.user.tag;
 
-    console.log('Form data:', { realName, email, birthdateString, userId });
+    log('Form data received', 'info', { realName, email, birthdateString, userId });
 
     // Validation (without clearing cache on errors)
     if (!email.endsWith('@pcampus.edu.np')) {
-        console.log('Email validation failed - NOT clearing cache');
+        log('Email validation failed', 'warn', { email });
         return await interaction.editReply({ content: '❌ Please use your official Pulchowk Campus email address (@pcampus.edu.np).' });
     }
 
     const birthdateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!birthdateRegex.test(birthdateString)) {
-        console.log('Birthdate format validation failed - NOT clearing cache');
+        log('Birthdate format validation failed', 'warn', { birthdateString });
         return await interaction.editReply({ content: '❌ Please enter your birthdate in YYYY-MM-DD format (e.g., 2000-01-15).' });
     }
 
     const [year, month, day] = birthdateString.split('-').map(Number);
     const date = new Date(year, month - 1, day);
     if (isNaN(date.getTime()) || date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) {
-        console.log('Birthdate value validation failed - NOT clearing cache');
+        log('Birthdate value validation failed', 'warn', { birthdateString, parsedDate: date });
         return await interaction.editReply({ content: '❌ The birthdate you entered is not valid. Please check the month, day, and year.' });
     }
 
@@ -416,8 +430,7 @@ export async function handleModalSubmit(interaction) {
 
     // Store in cache BEFORE attempting to send email
     otpCache.set(userId, otpData);
-    console.log(`OTP stored in cache for user ${userId}: ${otp}`);
-    console.log(`OTP expires at: ${new Date(otpExpiresAt).toISOString()}`);
+    log(`OTP stored in cache`, 'info', { userId, otp, expiresAt: new Date(otpExpiresAt).toISOString() });
     
     // Debug cache state after storing OTP
     debugOtpCache('after storing OTP');
@@ -433,9 +446,9 @@ export async function handleModalSubmit(interaction) {
         try {
             await emailClient.sendEmail(email, emailSubject, emailHtmlContent);
             emailSent = true;
-            console.log(`Email sent successfully to ${email}`);
+            log('Email sent successfully', 'success', { email });
         } catch (emailError) {
-            console.error("Error sending verification email:", emailError);
+            log('Error sending verification email', 'error', { email }, emailError);
             // Don't throw here - we'll still allow manual OTP entry
         }
 
@@ -461,14 +474,14 @@ export async function handleModalSubmit(interaction) {
             components: [row]
         });
 
-        console.log('Response sent to user, OTP should be in cache');
+        log('Response sent to user, OTP should be in cache', 'info');
         debugOtpCache('after sending response');
 
     } catch (error) {
-        console.error('Critical error during verification process:', error);
+        log('Critical error during verification process', 'error', null, error);
         // Only clear cache on truly critical errors
         otpCache.delete(userId);
-        console.log('Cache cleared due to critical error');
+        log('Cache cleared due to critical error', 'warn', { userId });
         await interaction.editReply({ 
             content: '❌ A critical error occurred during verification. Please try the `/verify` command again. If the issue persists, contact an admin.' 
         });
@@ -489,10 +502,10 @@ export async function saveBirthday(userId, guildId, birthdate, setBy) {
             [userId, guildId, month, day, year, setBy],
             function(err) {
                 if (err) {
-                    console.error('Error saving birthday:', err.message);
+                    log('Error saving birthday', 'error', { userId, guildId }, err);
                     return reject(err);
                 }
-                console.log(`Birthday for user ${userId} saved/updated in guild ${guildId}.`);
+                log(`Birthday for user ${userId} saved/updated in guild ${guildId}.`, 'success');
                 resolve(this.lastID);
             }
         );
@@ -505,10 +518,10 @@ export async function saveVerifiedUser(userId, guildId, realName, discordUsernam
             [userId, guildId, realName, discordUsername, email],
             function(err) {
                 if (err) {
-                    console.error('Error saving verified user to database:', err.message);
+                    log('Error saving verified user to database', 'error', { userId, guildId }, err);
                     return reject(err);
                 }
-                console.log(`User ${userId} (${discordUsername}) verified and saved in guild ${guildId}.`);
+                log(`User ${userId} (${discordUsername}) verified and saved in guild ${guildId}.`, 'success');
                 resolve(this.lastID);
             }
         );

@@ -12,6 +12,7 @@ import {
 import { getOtpCache, saveVerifiedUser, saveBirthday, debugOtpCache } from './verify.js';
 import dotenv from 'dotenv';
 import { db } from '../../database.js';
+import { log } from '../../utils/debug.js'; // Import the log function
 
 dotenv.config();
 
@@ -31,9 +32,11 @@ export const data = new SlashCommandBuilder()
  * Core logic for processing OTP confirmation, whether from slash command or modal submission.
  */
 async function _processOtpConfirmation(interaction, enteredOtp) {
-    console.log('=== _processOtpConfirmation ===');
-    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
-    console.log('Entered OTP:', enteredOtp);
+    log('_processOtpConfirmation started', 'command', {
+        userTag: interaction.user.tag,
+        userId: interaction.user.id,
+        enteredOtp // Will be sanitized by the logger
+    });
     
     // Debug cache state
     debugOtpCache('at start of OTP confirmation');
@@ -49,19 +52,21 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
 
     try {
         if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'YOUR_VERIFIED_ROLE_ID_HERE') {
+            log('Verification not configured: VERIFIED_ROLE_ID missing', 'error', null, new Error('VERIFIED_ROLE_ID is missing'));
             return await interaction.editReply({ content: '❌ Verification is not properly configured (VERIFIED_ROLE_ID is missing). Please contact an administrator.' });
         }
         if (!GUILD_ID || GUILD_ID === 'YOUR_GUILD_ID_HERE') {
+            log('Verification not configured: GUILD_ID missing', 'error', null, new Error('GUILD_ID is missing'));
             return await interaction.editReply({ content: '❌ The bot\'s main guild ID is not configured (GUILD_ID is missing). Please contact an administrator.' });
         }
 
         if (!userOtpData) {
-            console.log('No OTP data found in cache for user:', interaction.user.id);
+            log('No OTP data found in cache for user', 'warn', { userId: interaction.user.id });
             debugOtpCache('when OTP data not found');
             return await interaction.editReply({ content: '❌ No pending verification found. Please use the `/verify` command first to get an OTP.' });
         }
 
-        console.log('Found OTP data:', {
+        log('Found OTP data in cache', 'info', {
             storedOtp: userOtpData.otp,
             enteredOtp: enteredOtp,
             expiresAt: new Date(userOtpData.expiresAt).toISOString(),
@@ -70,18 +75,18 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
 
         // Check if OTP has expired
         if (Date.now() > userOtpData.expiresAt) {
-            console.log('OTP has expired');
+            log('OTP has expired', 'warn', { userId: interaction.user.id });
             getOtpCache().delete(interaction.user.id);
             return await interaction.editReply({ content: '❌ Your OTP has expired. Please use the `/verify` command again to get a new one.' });
         }
 
         // Check if OTP matches
         if (enteredOtp !== userOtpData.otp) {
-            console.log('OTP mismatch:', { entered: enteredOtp, expected: userOtpData.otp });
+            log('OTP mismatch', 'warn', { entered: enteredOtp, expected: userOtpData.otp });
             return await interaction.editReply({ content: '❌ Incorrect OTP. Please try again.' });
         }
 
-        console.log('OTP is valid, proceeding with verification...');
+        log('OTP is valid, proceeding with verification...', 'info');
 
         const guildId = userOtpData.guildId;
         let targetGuild;
@@ -91,37 +96,38 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
             targetGuild = await interaction.client.guilds.fetch(guildId);
             memberToVerify = await targetGuild.members.fetch(interaction.user.id);
         } catch (fetchError) {
-            console.error(`Error fetching guild or member during OTP confirmation for user ${interaction.user.id}:`, fetchError);
+            log('Error fetching guild or member during OTP confirmation', 'error', { userId: interaction.user.id }, fetchError);
             getOtpCache().delete(interaction.user.id);
             return await interaction.editReply({ content: '❌ Could not find you in the server to assign roles. Please ensure you are in the server and try again.' });
         }
 
         if (memberToVerify.roles.cache.has(VERIFIED_ROLE_ID)) {
             getOtpCache().delete(interaction.user.id);
+            log('User already verified, clearing old OTP cache', 'info', { userId: interaction.user.id });
             return await interaction.editReply({ content: '✅ You are already verified!' });
         }
 
         const verifiedRole = targetGuild.roles.cache.get(VERIFIED_ROLE_ID);
         if (!verifiedRole) {
-            console.error(`VERIFIED_ROLE_ID (${VERIFIED_ROLE_ID}) not found in guild ${targetGuild.name}.`);
+            log(`VERIFIED_ROLE_ID (${VERIFIED_ROLE_ID}) not found`, 'error', { guildName: targetGuild.name });
             getOtpCache().delete(interaction.user.id);
             return await interaction.editReply({ content: '❌ The verified role could not be found in the server. Please contact an administrator.' });
         }
 
         if (!targetGuild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
-            console.error(`Bot lacks 'Manage Roles' permission in guild ${targetGuild.name} to assign verified role.`);
+            log(`Bot lacks 'Manage Roles' permission`, 'error', { guildName: targetGuild.name });
             getOtpCache().delete(interaction.user.id);
             return await interaction.editReply({ content: '❌ I do not have permissions to assign roles. Please contact an administrator.' });
         }
         if (targetGuild.members.me.roles.highest.position <= verifiedRole.position) {
-            console.error(`Bot's highest role is not above ${verifiedRole.name} in guild ${targetGuild.name}.`);
+            log(`Bot's highest role is not above verified role`, 'error', { botRole: targetGuild.members.me.roles.highest.name, verifiedRole: verifiedRole.name });
             getOtpCache().delete(interaction.user.id);
             return await interaction.editReply({ content: '❌ My role is not high enough to assign the verified role. Please contact an administrator.' });
         }
 
         // Assign verified role
         await memberToVerify.roles.add(verifiedRole, 'User verification via OTP');
-        console.log(`Assigned verified role to ${memberToVerify.user.tag}`);
+        log('Assigned verified role', 'success', { userTag: memberToVerify.user.tag, roleName: verifiedRole.name });
 
         // Save to database
         await saveVerifiedUser(
@@ -141,7 +147,7 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
 
         // Clear OTP cache after successful verification
         getOtpCache().delete(interaction.user.id);
-        console.log('OTP cache cleared after successful verification');
+        log('OTP cache cleared after successful verification', 'info', { userId: interaction.user.id });
 
         const successEmbed = new EmbedBuilder()
             .setColor('#00FF00')
@@ -170,15 +176,15 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
                             { name: 'Birthdate', value: `${userOtpData.birthdate.year}-${userOtpData.birthdate.month}-${userOtpData.birthdate.day}`, inline: true }
                         )
                         .setTimestamp();
-                    await logChannel.send({ embeds: [logEmbed] }).catch(e => console.error("Error sending verification log:", e));
+                    await logChannel.send({ embeds: [logEmbed] }).catch(e => log('Error sending verification log', 'error', null, e));
                 }
             } catch (logError) {
-                console.error('Error sending verification log to channel:', logError);
+                log('Error sending verification log to channel', 'error', { channelId: VERIFICATION_LOG_CHANNEL_ID }, logError);
             }
         }
 
     } catch (error) {
-        console.error('Error during OTP confirmation:', error);
+        log('Error during OTP confirmation', 'error', null, error);
         await interaction.editReply({ content: '❌ An unexpected error occurred during OTP confirmation. Please try again later. If the issue persists, contact an admin.' });
     }
 }
@@ -195,19 +201,21 @@ export async function execute(interaction) {
  * Handles the click of the "Enter OTP" button.
  */
 export async function handleButtonInteraction(interaction) {
-    console.log('=== handleButtonInteraction (confirmotp) ===');
-    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
-    console.log('CustomId:', interaction.customId);
+    log('handleButtonInteraction (confirmotp) started', 'interaction', {
+        userTag: interaction.user.tag,
+        userId: interaction.user.id,
+        customId: interaction.customId
+    });
     
     // Debug cache state when button is clicked
     debugOtpCache('when OTP button clicked');
 
     // Parse customId: confirm_otp_button_${userId}_${timestamp}
     const customIdParts = interaction.customId.split('_');
-    console.log('CustomId parts:', customIdParts);
+    log('CustomId parts parsed', 'info', { parts: customIdParts });
     
     if (customIdParts.length < 4) {
-        console.log('Invalid customId format');
+        log('Invalid customId format', 'warn', { customId: interaction.customId });
         return await interaction.reply({ 
             content: '❌ Invalid button. Please use the `/verify` command again.', 
             flags: [MessageFlags.Ephemeral] 
@@ -215,8 +223,7 @@ export async function handleButtonInteraction(interaction) {
     }
     
     const expectedUserId = customIdParts[3]; // Index 3 should be the userId
-    console.log(`Expected User ID from customId: ${expectedUserId}`);
-    console.log(`Interaction User ID: ${interaction.user.id}`);
+    log('Checking button ownership', 'verbose', { expectedUserId, actualUserId: interaction.user.id });
 
     if (interaction.user.id !== expectedUserId) {
         return await interaction.reply({ content: '❌ This button is not for you.', flags: [MessageFlags.Ephemeral] });
@@ -224,19 +231,19 @@ export async function handleButtonInteraction(interaction) {
 
     const userOtpData = getOtpCache().get(interaction.user.id);
     if (!userOtpData) {
-        console.log('No OTP data found when button clicked');
+        log('No OTP data found when button clicked', 'warn', { userId: interaction.user.id });
         debugOtpCache('when no OTP data found for button');
         return await interaction.reply({ content: '❌ No pending verification found. Please use the `/verify` command first to get an OTP.', flags: [MessageFlags.Ephemeral] });
     }
     
     // Check if OTP expired
     if (Date.now() > userOtpData.expiresAt) {
-        console.log('OTP expired when button clicked');
+        log('OTP expired when button clicked', 'warn', { userId: interaction.user.id });
         getOtpCache().delete(interaction.user.id);
         return await interaction.reply({ content: '❌ Your OTP has expired. Please use the `/verify` command again to get a new one.', flags: [MessageFlags.Ephemeral] });
     }
 
-    console.log('OTP data found, showing modal');
+    log('OTP data found, showing modal', 'info');
 
     const modal = new ModalBuilder()
         .setCustomId('confirmOtpModal')
@@ -261,8 +268,10 @@ export async function handleButtonInteraction(interaction) {
  * Handles the submission of the confirm OTP modal ('confirmOtpModal').
  */
 export async function handleModalSubmit(interaction) {
-    console.log('=== handleModalSubmit (confirmotp) ===');
-    console.log('User:', interaction.user.tag, '(', interaction.user.id, ')');
+    log('handleModalSubmit (confirmotp) started', 'interaction', {
+        userTag: interaction.user.tag,
+        userId: interaction.user.id
+    });
     
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
