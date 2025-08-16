@@ -148,6 +148,45 @@ class DebugConfig {
 	}
 
 	/**
+	 * Force sanitize sensitive data from objects before logging, regardless of global settings.
+	 * @param {any} data Data to sanitize
+	 * @returns {any} Sanitized data
+	 */
+	_forceSanitizeData(data) {
+		if (data === null || data === undefined) {
+			return data;
+		}
+		// List of sensitive keys to always redact (add more as needed)
+		const sensitivePatterns = [
+			'password', 'secret', 'token', 'key', 'api', 'auth', 'session', 'credential', 'env', 'BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID'
+		];
+		const redact = (obj) => {
+			if (typeof obj !== 'object' || obj === null) return obj;
+			if (Array.isArray(obj)) return obj.map(redact);
+			const result = {};
+			for (const k of Object.keys(obj)) {
+				const lowerK = k.toLowerCase();
+				if (sensitivePatterns.some(pattern => lowerK.includes(pattern))) {
+					result[k] = '[REDACTED]';
+				} else if (typeof obj[k] === 'object' && obj[k] !== null) {
+					result[k] = redact(obj[k]);
+				} else {
+					result[k] = obj[k];
+				}
+			}
+			return result;
+		};
+		// If the data is process.env or contains process.env, redact all values
+		if (
+			(typeof process !== 'undefined' && data === process.env) ||
+			(data && typeof data === 'object' && Object.keys(process.env || {}).some(envKey => Object.prototype.hasOwnProperty.call(data, envKey)))
+		) {
+			return '[REDACTED: process.env]';
+		}
+		return redact(data);
+	}
+
+	/**
 	 * Limit data output length to prevent log flooding
 	 * @param {any} data Data to limit
 	 * @returns {any} Limited data
@@ -344,8 +383,9 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 		if (this.debugStream) this.debugStream.write(sanitizedMessage + '\n');
 		}
 		if (data !== null) {
-		// Data should already be sanitized and limited before being passed here
-		const formattedData = JSON.stringify(data, null, 2);
+		// Always force sanitization of data before logging, regardless of global settings
+		const forceSanitizedData = this._forceSanitizeData(data);
+		const formattedData = JSON.stringify(forceSanitizedData, null, 2);
 		console.log(formattedData);
 		if (this.debugStream) this.debugStream.write(formattedData + '\n');
 		}
