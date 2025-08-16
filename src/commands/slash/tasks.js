@@ -81,7 +81,7 @@ export async function execute(interaction) {
             const userId = interaction.user.id;
             const guildId = interaction.guild.id;
 
-            db.get(`SELECT * FROM admin_tasks WHERE id = ? AND guildId = ?`, [taskId, guildId], async (err, row) => {
+            db.get(`SELECT * FROM admin_tasks WHERE id = ? AND guild_id = ?`, [taskId, guildId], async (err, row) => {
                 if (err) {
                     console.error('Error fetching task:', err.message);
                     return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error checking task: ${err.message}`)], ephemeral: true });
@@ -117,7 +117,7 @@ export async function execute(interaction) {
                 return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription("❌ Invalid status. Use `pending`, `completed`, `in-progress`, or `all`.")], ephemeral: true });
             }
 
-            const query = `SELECT * FROM admin_tasks WHERE guildId = ? AND status LIKE ? ORDER BY createdAt DESC`;
+            const query = `SELECT * FROM admin_tasks WHERE guild_id = ? AND status LIKE ? ORDER BY createdAt DESC`;
             db.all(query, [interaction.guild.id, queryStatus], async (err, rows) => {
                 if (err) {
                     console.error('Error fetching tasks:', err.message);
