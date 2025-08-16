@@ -75,7 +75,7 @@ async function writeServiceAccountKey() {
 }
 
 /**
- * Main Discord Bot class with improved error handling and interaction management.
+ * Main Discord Bot class
  */
 class PulchowkBot {
     constructor(token, dbInstance) {
@@ -123,7 +123,7 @@ class PulchowkBot {
         this.spamWarnings = new Map();
         this.voiceStates = new Map();
         this.rateLimitMap = new Map();
-        this.interactionStates = new Map(); // Track interaction states
+        this.interactionStates = new Map(); 
 
         this._initializeCommands();
         this._registerEventListeners();
@@ -177,7 +177,7 @@ class PulchowkBot {
     }
 
     /**
-     * Registers all Discord.js event listeners with improved error handling.
+     * Registers all Discord.js event listeners
      * @private
      */
     _registerEventListeners() {
@@ -199,8 +199,6 @@ class PulchowkBot {
                 this.debugConfig.log('Error during bot initialization:', 'client', null, error, 'error');
             }
         });
-
-        // Core event handlers with error wrapping
         this.client.on(Events.InteractionCreate, this._safeEventHandler('InteractionCreate', this._onInteractionCreate.bind(this)));
         this.client.on(Events.VoiceStateUpdate, this._safeEventHandler('VoiceStateUpdate', this._onVoiceStateUpdate.bind(this)));
         this.client.on(Events.MessageCreate, this._safeEventHandler('MessageCreate', this._onMessageCreate.bind(this)));
@@ -208,8 +206,6 @@ class PulchowkBot {
         this.client.on(Events.GuildMemberRemove, this._safeEventHandler('GuildMemberRemove', this._onGuildMemberRemove.bind(this)));
         this.client.on(Events.MessageReactionAdd, this._safeEventHandler('MessageReactionAdd', this._onMessageReactionAdd.bind(this)));
         this.client.on(Events.MessageReactionRemove, this._safeEventHandler('MessageReactionRemove', this._onMessageReactionRemove.bind(this)));
-
-        // Error handling
         this.client.on(Events.Error, error => this.debugConfig.log('Discord.js Client Error:', 'client', null, error, 'error'));
         this.client.on(Events.ShardDisconnect, (event, id) => this.debugConfig.log(`Shard ${id} Disconnected:`, 'client', { event }, null, 'warn'));
         this.client.on(Events.ShardReconnecting, (id) => this.debugConfig.log(`Shard ${id} Reconnecting...`, 'client', null, null, 'info'));
@@ -219,7 +215,7 @@ class PulchowkBot {
     }
 
     /**
-     * Wraps event handlers with error handling to prevent crashes.
+     * Wraps event handlers
      * @private
      */
     _safeEventHandler(eventName, handler) {
@@ -290,12 +286,8 @@ class PulchowkBot {
         });
     }
 
-    // ===================================================================================
-    // == IMPROVED INTERACTION HANDLING ==================================================
-    // ===================================================================================
-
     /**
-     * Enhanced interaction handler with comprehensive error handling.
+     * Enhanced interaction handler
      */
     async _onInteractionCreate(interaction) {
         const startTime = Date.now();
@@ -729,7 +721,6 @@ class PulchowkBot {
                 errorCode: error.code
             }, error, 'error');
 
-            // Handle specific error cases
             if (error.code === 10062) {
                 this.debugConfig.log('Interaction expired', 'interaction', { user: interaction.user?.tag }, null, 'warn');
                 return;
@@ -739,8 +730,6 @@ class PulchowkBot {
                 this.debugConfig.log('Interaction already acknowledged', 'interaction', { user: interaction.user?.tag }, null, 'warn');
                 return;
             }
-
-            // Last resort attempt
             if (!interaction.replied) {
                 try {
                     await interaction.followUp({
@@ -824,8 +813,6 @@ class PulchowkBot {
      */
     async _handleInteractionError(interaction, error, context = {}) {
         const duration = Date.now() - (context.startTime || Date.now());
-        
-        // Classify error types
         let errorType = 'unknown';
         if (error.code === 10062) errorType = 'expired';
         else if (error.code === 40060) errorType = 'already_acknowledged';
@@ -839,13 +826,9 @@ class PulchowkBot {
             errorCode: error.code,
             errorType
         }, error, 'error');
-
-        // Don't respond to expired or acknowledged interactions
         if (error.code === 10062 || error.code === 40060) {
             return;
         }
-
-        // Only send error response if not already handled
         if (!interaction.replied && !interaction.deferred) {
             await this._safeErrorReply(interaction, '⚠️ An unexpected error occurred. Please try again later.');
         }
@@ -859,17 +842,12 @@ class PulchowkBot {
         const key = `${userId}:${action}`;
         const now = Date.now();
         const userActions = this.rateLimitMap.get(key) || [];
-
         const recentActions = userActions.filter(time => now - time < window);
-
         if (recentActions.length >= limit) {
             return true;
         }
-
         recentActions.push(now);
         this.rateLimitMap.set(key, recentActions);
-
-        // Cleanup occasionally
         if (Math.random() < 0.01) {
             this._cleanupRateLimitMap();
         }
@@ -883,8 +861,7 @@ class PulchowkBot {
      */
     _cleanupRateLimitMap() {
         const now = Date.now();
-        const maxAge = 300000; // 5 minutes
-
+        const maxAge = 300000;
         for (const [key, actions] of this.rateLimitMap.entries()) {
             const recentActions = actions.filter(time => now - time < maxAge);
             if (recentActions.length === 0) {
@@ -911,11 +888,6 @@ class PulchowkBot {
             );
         });
     }
-
-    // ===================================================================================
-    // == CORE EVENT HANDLERS ============================================================
-    // ===================================================================================
-
     /**
      * Enhanced voice state update handler.
      * @private
@@ -928,8 +900,6 @@ class PulchowkBot {
         const userLeft = oldState.channelId && !newState.channelId;
         const userMoved = oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId;
         const userJoined = !oldState.channelId && newState.channelId;
-
-        // Handle leaving/moving
         if (userLeft || userMoved) {
             const session = this.voiceStates.get(userId);
             if (session) {
@@ -955,8 +925,6 @@ class PulchowkBot {
                 this.client.db.run(`DELETE FROM active_voice_sessions WHERE user_id = ? AND guild_id = ?`, [userId, guildId]);
             }
         }
-
-        // Handle joining/moving
         if (userJoined || userMoved) {
             this.voiceStates.set(userId, {
                 guildId,
@@ -1010,8 +978,6 @@ class PulchowkBot {
         try {
             const userAvatar = member.user.displayAvatarURL({ dynamic: true, size: 128 });
             const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
-
-            // Check if previously verified
             const verifiedRow = await new Promise((resolve, reject) => {
                 this.client.db.get(
                     `SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`,
@@ -1027,7 +993,6 @@ class PulchowkBot {
             let dmComponents = [];
 
             if (verifiedRow) {
-                // Previously verified - restore role
                 if (VERIFIED_ROLE_ID) {
                     const verifiedRole = member.guild.roles.cache.get(VERIFIED_ROLE_ID);
                     if (verifiedRole) {
@@ -1047,7 +1012,6 @@ class PulchowkBot {
                     .setThumbnail(userAvatar)
                     .setTimestamp();
             } else {
-                // New user - needs verification
                 const verifyButton = new ButtonBuilder()
                     .setCustomId(`verify_start_button_${member.user.id}`)
                     .setLabel('Verify Your Account')
@@ -1062,16 +1026,12 @@ class PulchowkBot {
                     .setThumbnail(userAvatar)
                     .setTimestamp();
             }
-
-            // Send welcome DM
             try {
                 await member.send({ embeds: [dmEmbed], components: dmComponents });
                 this.debugConfig.log(`Sent welcome DM to ${member.user.tag}`, 'event');
             } catch (dmErr) {
                 this.debugConfig.log('Could not send welcome DM', 'event', { user: member.user.tag }, dmErr, 'warn');
             }
-
-            // Send public welcome message
             const guildConfig = await new Promise((resolve) => {
                 this.client.db.get(
                     `SELECT welcome_channel_id, welcome_message_content FROM guild_configs WHERE guild_id = ?`,
@@ -1153,7 +1113,6 @@ class PulchowkBot {
         if (user.bot || !reaction.message.guild) return;
 
         try {
-            // Reaction roles
             const reactionRole = await new Promise((resolve) => {
                 this.client.db.get(
                     `SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
@@ -1170,8 +1129,6 @@ class PulchowkBot {
                     await member.roles.add(role, 'Reaction role assignment');
                 }
             }
-
-            // Suggestion voting
             const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
             if (reaction.message.channel.id === SUGGESTIONS_CHANNEL_ID && ['👍', '👎'].includes(reaction.emoji.name)) {
                 await this._updateSuggestionVotes(reaction.message);
@@ -1198,7 +1155,6 @@ class PulchowkBot {
         if (user.bot || !reaction.message.guild) return;
 
         try {
-            // Reaction roles
             const reactionRole = await new Promise((resolve) => {
                 this.client.db.get(
                     `SELECT role_id FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?`,
@@ -1215,8 +1171,6 @@ class PulchowkBot {
                     await member.roles.remove(role, 'Reaction role removal');
                 }
             }
-
-            // Suggestion voting
             const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID;
             if (reaction.message.channel.id === SUGGESTIONS_CHANNEL_ID && ['👍', '👎'].includes(reaction.emoji.name)) {
                 await this._updateSuggestionVotes(reaction.message);
@@ -1318,13 +1272,9 @@ class PulchowkBot {
                 if (userData.count > message_limit) {
                     this.spamWarnings.set(userId, (this.spamWarnings.get(userId) || 0) + 1);
                     const currentWarnings = this.spamWarnings.get(userId);
-
-                    // Delete spam messages
                     if (message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
                         await message.channel.bulkDelete(Math.min(userData.count, 100), true);
                     }
-
-                    // Apply moderation
                     if (currentWarnings >= ban_threshold && message.member?.bannable) {
                         await message.member.ban({ reason: `Anti-spam: ${currentWarnings} warnings.` });
                         await message.channel.send(`🚨 ${message.author.tag} has been banned for repeated spamming.`);
@@ -1436,7 +1386,6 @@ class PulchowkBot {
                     }
                 );
             });
-
             const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
             const message = await suggestionsChannel?.messages.fetch(suggestionRow.message_id).catch(() => null);
             
@@ -1447,7 +1396,6 @@ class PulchowkBot {
                 
                 await message.edit({ embeds: [updatedEmbed], components: [] });
             }
-
             await this._safeReply(interaction, {
                 content: `✅ Suggestion \`${suggestionId}\` has been denied.`,
                 flags: MessageFlags.Ephemeral
@@ -1474,11 +1422,9 @@ class PulchowkBot {
                     }
                 );
             });
-
             if (!suggestionRow) {
                 return this._safeErrorReply(interaction, `⚠️ Suggestion with ID \`${suggestionId}\` not found.`);
             }
-
             await new Promise((resolve, reject) => {
                 this.client.db.run(
                     `DELETE FROM suggestions WHERE id = ?`,
@@ -1489,14 +1435,12 @@ class PulchowkBot {
                     }
                 );
             });
-
             const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
             const message = await suggestionsChannel?.messages.fetch(suggestionRow.message_id).catch(() => null);
             
             if (message) {
                 await message.delete(`Deleted by ${interaction.user.tag}. Reason: ${reason}`);
             }
-
             await this._safeReply(interaction, {
                 content: `✅ Suggestion \`${suggestionId}\` has been deleted.`,
                 flags: MessageFlags.Ephemeral
@@ -1506,10 +1450,6 @@ class PulchowkBot {
             await this._safeErrorReply(interaction, `⚠️ An error occurred while deleting suggestion \`${suggestionId}\`.`);
         }
     }
-
-    // ===================================================================================
-    // == SCHEDULED JOBS ==================================================================
-    // ===================================================================================
 
     /**
      * Sets up all scheduled jobs with better error handling.
@@ -1748,9 +1688,7 @@ class PulchowkBot {
                         }
                     );
                 });
-
                 if (birthdays.length === 0) continue;
-
                 const birthdayUsers = [];
                 for (const birthday of birthdays) {
                     try {
@@ -1780,7 +1718,7 @@ class PulchowkBot {
     }
 
     /**
-     * Starts the bot with enhanced error handling.
+     * Starts the bot
      */
     async start() {
         this.debugConfig.log('Starting bot...', 'init');
@@ -1803,17 +1741,11 @@ class PulchowkBot {
         this.debugConfig.log('Initiating bot shutdown...', 'shutdown');
         
         try {
-            // Clear all scheduled jobs
             schedule.gracefulShutdown();
-            
-            // Close database connection
             if (this.client.db) {
                 this.client.db.close();
             }
-            
-            // Destroy Discord client
             this.client.destroy();
-            
             this.debugConfig.log('Bot shutdown completed', 'shutdown', null, null, 'success');
         } catch (error) {
             this.debugConfig.log('Error during shutdown', 'shutdown', null, error, 'error');
@@ -1821,40 +1753,28 @@ class PulchowkBot {
     }
 }
 
-// ===================================================================================
-// == MAIN INITIALIZATION ============================================================
-// ===================================================================================
-
 async function main() {
     try {
         debugConfig.log('Initializing application...', 'init');
-        
         const requiredEnvVars = ['BOT_TOKEN', 'CLIENT_ID'];
         const missing = requiredEnvVars.filter(varName => !process.env[varName]);
-        
         if (missing.length > 0) {
             throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
         }
-
         const database = await initializeDatabase();
         debugConfig.log('Database initialized successfully', 'init');
-
         const bot = new PulchowkBot(process.env.BOT_TOKEN, database);
-        
         process.on('SIGINT', async () => {
             debugConfig.log('Received SIGINT signal, shutting down gracefully...', 'shutdown');
             await bot.shutdown();
             process.exit(0);
         });
-
         process.on('SIGTERM', async () => {
             debugConfig.log('Received SIGTERM signal, shutting down gracefully...', 'shutdown');
             await bot.shutdown();
             process.exit(0);
         });
-
         await bot.start();
-        
     } catch (error) {
         debugConfig.log('Critical application error', 'init', null, error, 'error');
         console.error('Application failed to start:', error);
