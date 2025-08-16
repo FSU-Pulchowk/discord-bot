@@ -26,6 +26,7 @@ import { scrapeLatestNotice } from './services/scraper.js';
 import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
 import { fromPath } from 'pdf2pic';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { NoticeProcessor } from './utils/NoticeProcessor.js';
 
 import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
@@ -82,7 +83,6 @@ class PulchowkBot {
         this.db = dbInstance;
         this.debugConfig = debugConfig;
         this.debugConfig.log("Bot instance created. Initializing...", 'init');
-
         this.colors = {
             primary: 0x5865F2,
             success: 0x57F287,
@@ -106,13 +106,17 @@ class PulchowkBot {
                 Partials.Reaction,
                 Partials.User,
                 Partials.GuildMember
-            ]
+            ],
+            rest: {
+                requestTimeout: 60000 
+            }
         });
 
         this.client.db = dbInstance;
         this.client.commands = new Collection();
         this.commandFiles = [];
         this.developers = process.env.DEVELOPER_IDS ? process.env.DEVELOPER_IDS.split(',') : [];
+        this.noticeProcessor = null;
 
         // State management
         this.spamMap = new Map();
@@ -123,8 +127,7 @@ class PulchowkBot {
 
         this._initializeCommands();
         this._registerEventListeners();
-    }
-
+}
     /**
      * Initializes and loads all slash commands with better error handling.
      * @private
@@ -152,7 +155,6 @@ class PulchowkBot {
                         return;
                     }
 
-                    // Validate command data
                     if (!commandModule.data.name || typeof commandModule.execute !== 'function') {
                         this.debugConfig.log(`Invalid command in ${file}: missing name or execute function`, 'command', { file }, null, 'warn');
                         return;
@@ -186,6 +188,8 @@ class PulchowkBot {
             c.user.setActivity('for new RSS feeds', { type: 'WATCHING' });
             
             try {
+                this.noticeProcessor = new NoticeProcessor(this.client, this.debugConfig, this.colors);
+                this.debugConfig.log('NoticeProcessor initialized successfully', 'client', null, null, 'success');
                 await this._registerSlashCommands();
                 this._scheduleJobs();
                 await this._loadActiveVoiceSessions();
@@ -1562,203 +1566,34 @@ class PulchowkBot {
     }
 
     /**
-     * Enhanced notice checking and announcement system.
+     * Enhanced notice checking - delegates to the enhanced processor
      * @private
      */
     async _checkAndAnnounceNotices() {
-        this.debugConfig.log('Starting notice check...', 'scheduler');
-        const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
-        const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
-        const TEMP_ATTACHMENT_DIR = path.join(process.cwd(), 'temp_notice_attachments');
-
         try {
-            // Create temp directory
-            await fsPromises.mkdir(TEMP_ATTACHMENT_DIR, { recursive: true });
+            if (!this.noticeProcessor) {
+                this.debugConfig.log('NoticeProcessor not initialized yet, skipping notice check', 'scheduler', null, null, 'warn');
+                return;
+            }
+
+            if (!this.client || !this.client.isReady()) {
+                this.debugConfig.log('Discord client not ready, skipping notice check', 'scheduler', null, null, 'warn');
+                return;
+            }
+
+            await this.noticeProcessor.checkAndAnnounceNotices();
         } catch (error) {
-            this.debugConfig.log('Error creating temp directory', 'scheduler', null, error, 'error');
+            this.debugConfig.log('Error in enhanced notice processing', 'scheduler', null, error, 'error');
+            
+            const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
             if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
                 try {
                     const adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
-                    await adminChannel?.send(`⚠️ Critical: Could not create temp directory: ${error.message}`);
-                } catch (fetchErr) {
-                    this.debugConfig.log('Could not notify admin of temp directory error', 'scheduler', null, fetchErr, 'warn');
+                    await adminChannel?.send(`🚨 **Critical Notice Processing Error:**\n\`\`\`${error.message}\`\`\``);
+                } catch (adminError) {
+                    this.debugConfig.log('Could not send admin notification', 'scheduler', null, adminError, 'warn');
                 }
             }
-            return;
-        }
-
-        if (!TARGET_NOTICE_CHANNEL_ID || TARGET_NOTICE_CHANNEL_ID === 'YOUR_NOTICE_CHANNEL_ID_HERE') {
-            this.debugConfig.log('TARGET_NOTICE_CHANNEL_ID not configured. Skipping notice announcements.', 'scheduler', null, null, 'warn');
-            return;
-        }
-
-        let noticeChannel;
-        let adminChannel = null;
-
-        try {
-            noticeChannel = await this.client.channels.fetch(TARGET_NOTICE_CHANNEL_ID);
-            if (!noticeChannel || !(noticeChannel.type === ChannelType.GuildText || noticeChannel.type === ChannelType.GuildAnnouncement)) {
-                this.debugConfig.log('Notice channel not found or invalid type', 'scheduler', { channelId: TARGET_NOTICE_CHANNEL_ID }, null, 'error');
-                return;
-            }
-
-            if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
-                adminChannel = await this.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID).catch(() => null);
-            }
-        } catch (error) {
-            this.debugConfig.log('Error fetching channels', 'scheduler', null, error, 'error');
-            return;
-        }
-
-        try {
-            const scrapedNotices = await scrapeLatestNotice();
-            if (!scrapedNotices || scrapedNotices.length === 0) {
-                this.debugConfig.log('No notices found or scraper returned empty.', 'scheduler');
-                return;
-            }
-
-            const MAX_NOTICE_AGE_DAYS = parseInt(process.env.MAX_NOTICE_AGE_DAYS || '30', 10);
-            const now = new Date();
-
-            const noticesToAnnounce = scrapedNotices.filter(notice => {
-                const noticeDate = new Date(notice.date);
-                if (isNaN(noticeDate.getTime())) {
-                    this.debugConfig.log(`Invalid date format: ${notice.title} - ${notice.date}`, 'scheduler', { notice }, null, 'warn');
-                    return false;
-                }
-
-                const ageInDays = (now - noticeDate) / (1000 * 60 * 60 * 24);
-                return ageInDays <= MAX_NOTICE_AGE_DAYS;
-            });
-
-            if (noticesToAnnounce.length === 0) {
-                this.debugConfig.log(`No notices found in the last ${MAX_NOTICE_AGE_DAYS} days.`, 'scheduler');
-                return;
-            }
-
-            this.debugConfig.log(`Processing ${noticesToAnnounce.length} notices from the past ${MAX_NOTICE_AGE_DAYS} days.`, 'scheduler');
-
-            for (const notice of noticesToAnnounce) {
-                let tempFilesOnDisk = [];
-                
-                try {
-                    if (!notice?.title || !notice?.link) {
-                        this.debugConfig.log('Invalid notice object', 'scheduler', { notice }, null, 'warn');
-                        continue;
-                    }
-
-                    // Check if already announced
-                    const existingNotice = await new Promise((resolve, reject) => {
-                        this.client.db.get(
-                            `SELECT COUNT(*) AS count FROM notices WHERE link = ?`,
-                            [notice.link],
-                            (err, result) => {
-                                if (err) reject(err);
-                                else resolve(result);
-                            }
-                        );
-                    });
-
-                    if (existingNotice.count > 0) {
-                        this.debugConfig.log(`Notice already announced: ${notice.title}`, 'scheduler', { title: notice.title });
-                        continue;
-                    }
-
-                    this.debugConfig.log(`Processing new notice: ${notice.title}`, 'scheduler');
-
-                    const noticeEmbed = new EmbedBuilder()
-                        .setColor('#1E90FF')
-                        .setTitle(`Notice ${notice.id ? notice.id + ': ' : ''}${notice.title}`)
-                        .setURL(notice.link)
-                        .setFooter({ text: `Source: ${notice.source}` })
-                        .setTimestamp(new Date(notice.date));
-
-                    let allFilesForNotice = [];
-                    let description = 'A new notice has been published.';
-
-                    // Process attachments
-                    if (notice.attachments && notice.attachments.length > 0) {
-                        this.debugConfig.log(`Processing ${notice.attachments.length} attachments`, 'scheduler');
-                        
-                        for (const attachmentUrl of notice.attachments) {
-                            try {
-                                const fileName = path.basename(new URL(attachmentUrl).pathname);
-                                const tempFilePath = path.join(TEMP_ATTACHMENT_DIR, fileName);
-                                tempFilesOnDisk.push(tempFilePath);
-
-                                // Download attachment
-                                const response = await axios({
-                                    method: 'GET',
-                                    url: attachmentUrl,
-                                    responseType: 'stream',
-                                    timeout: 30000
-                                });
-
-                                const writer = createWriteStream(tempFilePath);
-                                response.data.pipe(writer);
-                                
-                                await new Promise((resolve, reject) => {
-                                    writer.on('finish', resolve);
-                                    writer.on('error', reject);
-                                });
-
-                                // Process PDF files
-                                if (fileName.toLowerCase().endsWith('.pdf')) {
-                                    await this._processPDFAttachment(fileName, tempFilePath, TEMP_ATTACHMENT_DIR, allFilesForNotice, tempFilesOnDisk);
-                                } else {
-                                    allFilesForNotice.push(new AttachmentBuilder(tempFilePath, { name: fileName }));
-                                    this.debugConfig.log(`Prepared attachment: ${fileName}`, 'scheduler', null, null, 'verbose');
-                                }
-                            } catch (downloadError) {
-                                this.debugConfig.log(`Error processing attachment ${attachmentUrl}`, 'scheduler', null, downloadError, 'error');
-                                description += `\n\n⚠️ Could not download an attachment: ${attachmentUrl}`;
-                            }
-                        }
-                    }
-
-                    noticeEmbed.setDescription(description);
-
-                    // Send notices with attachment chunks
-                    await this._sendNoticeWithAttachments(noticeChannel, noticeEmbed, allFilesForNotice, notice.title);
-
-                    // Save to database
-                    await new Promise((resolve, reject) => {
-                        this.client.db.run(
-                            `INSERT INTO notices (title, link, date, announced_at) VALUES (?, ?, ?, ?)`,
-                            [notice.title, notice.link, notice.date, Date.now()],
-                            (err) => {
-                                if (err) reject(err);
-                                else resolve();
-                            }
-                        );
-                    });
-
-                    this.debugConfig.log(`Successfully announced notice: ${notice.title}`, 'scheduler', null, null, 'success');
-
-                } catch (noticeError) {
-                    this.debugConfig.log(`Error processing notice: ${notice.title}`, 'scheduler', null, noticeError, 'error');
-                    if (adminChannel) {
-                        await adminChannel.send(`⚠️ Error processing notice "${notice.title}": ${noticeError.message}`).catch(() => {});
-                    }
-                } finally {
-                    // Cleanup temp files
-                    for (const filePath of tempFilesOnDisk) {
-                        try {
-                            await fsPromises.unlink(filePath);
-                        } catch (unlinkError) {
-                            this.debugConfig.log(`Error cleaning up temp file: ${filePath}`, 'scheduler', null, unlinkError, 'warn');
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            this.debugConfig.log('Error during notice scraping', 'scheduler', null, error, 'error');
-            if (adminChannel) {
-                await adminChannel.send(`⚠️ Notice scraping failed: ${error.message}`).catch(() => {});
-            }
-        } finally {
-            // Cleanup temp directory
-            await fsPromises.rm(TEMP_ATTACHMENT_DIR, { recursive: true, force: true }).catch(() => {});
         }
     }
 
@@ -1767,7 +1602,7 @@ class PulchowkBot {
      * @private
      */
     async _processPDFAttachment(fileName, tempFilePath, tempDir, allFiles, tempFilesOnDisk) {
-        const MAX_PDF_PAGES_TO_CONVERT = 10;
+        const MAX_PDF_PAGES_TO_CONVERT = Infinity;
         
         try {
             let totalPdfPages = 0;

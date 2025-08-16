@@ -3,14 +3,14 @@ import { SlashCommandBuilder, EmbedBuilder, PermissionsBitField } from 'discord.
 export const data = new SlashCommandBuilder()
     .setName('viewantispam')
     .setDescription('Displays current anti-spam settings.')
-    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator);
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild);
 
 export async function execute(interaction) {
     if (!interaction.guild) {
         return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
     }
 
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
         return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
     }
 

@@ -30,7 +30,6 @@ export async function execute(interaction) {
     const db = interaction.client.db;
     const SUGGESTIONS_CHANNEL_ID = process.env.SUGGESTIONS_CHANNEL_ID || 'YOUR_SUGGESTIONS_CHANNEL_ID_HERE';
 
-    // FIX: Added missing backticks to the SQL query string
     db.get(`SELECT * FROM suggestions WHERE id = ? AND guild_id = ?`, [suggestionId, guildId], async (err, row) => {
         if (err) {
             console.error('Error fetching suggestion:', err.message);

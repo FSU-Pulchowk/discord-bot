@@ -12,7 +12,7 @@ import {
 import { getOtpCache, saveVerifiedUser, saveBirthday, debugOtpCache } from './verify.js';
 import dotenv from 'dotenv';
 import { db } from '../../database.js';
-import { log } from '../../utils/debug.js'; // Import the log function
+import { log } from '../../utils/debug.js';
 
 dotenv.config();
 
@@ -35,7 +35,7 @@ async function _processOtpConfirmation(interaction, enteredOtp) {
     log('_processOtpConfirmation started', 'command', {
         userTag: interaction.user.tag,
         userId: interaction.user.id,
-        enteredOtp // Will be sanitized by the logger
+        enteredOtp
     });
     
     // Debug cache state
