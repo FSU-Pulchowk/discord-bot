@@ -28,7 +28,6 @@ RUN apt-get update && \
         libxdamage1 \
         libxrandr2 \
         xdg-utils \
-        chromium \
         graphicsmagick \
         ghostscript \
     && rm -rf /var/lib/apt/lists/* \
