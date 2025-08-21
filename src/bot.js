@@ -391,6 +391,7 @@ class PulchowkBot {
             if (await this._handleVerificationButtons(interaction)) return;
             if (await this._handleGotVerifiedButtons(interaction)) return;
             if (await this._handleSetupButtons(interaction)) return;
+            if (await this._handleWarnButtons(interaction)) return;
             await this._ensureDeferred(interaction);
             await interaction.editReply({
                 content: '⚠️ This button interaction is no longer available or has expired.',
@@ -401,7 +402,19 @@ class PulchowkBot {
             await this._safeErrorReply(interaction, '⚠️ An error occurred while processing this button.');
         }
     }
-
+    /**
+     * Handles warn command buttons.
+     * @private
+     */
+    async _handleWarnButtons(interaction) {
+        const customId = interaction.customId;
+        
+        if (customId === 'confirm_warn' || customId === 'cancel_warn') {
+            return true;
+        }
+        
+        return false;
+    }
     /**
      * Handles verification-related buttons with improved error handling.
      * @private
