@@ -1677,7 +1677,13 @@ class PulchowkBot {
         try {
             announcementChannel = await this.client.channels.fetch(BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID);
             if (!announcementChannel) {
-                this.debugConfig.log('Birthday announcement channel not found', 'scheduler', { channelId: BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID }, null, 'error');
+                this.debugConfig.log(
+                    'Birthday announcement channel not found',
+                    'scheduler',
+                    { channelId: BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID ? '[REDACTED]' : '(not set)' },
+                    null,
+                    'error'
+                );
                 return;
             }
         } catch (error) {
