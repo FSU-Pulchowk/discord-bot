@@ -1575,7 +1575,7 @@ class PulchowkBot {
 
             // Convert PDF to images
             const pdfConvertOptions = {
-                density: 150,
+                density: 300,
                 quality: 90,
                 height: 1754,
                 width: 1240,

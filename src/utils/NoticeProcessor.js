@@ -297,8 +297,8 @@ class NoticeProcessor {
             }
 
             const pdfConvertOptions = {
-                density: 100,
-                quality: 80, 
+                density: 300,
+                quality: 90, 
                 height: 1754,
                 width: 1240,
                 format: "png",

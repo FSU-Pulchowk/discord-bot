@@ -125,7 +125,7 @@ export async function scrapeIoeExamNotice() {
  * @returns {Promise<Array<object>>} - A list of notice objects.
  */
 export async function scrapePcampusNotice() {
-    const listUrl = "https://pcampus.edu.np/";
+    const listUrl = "http://pcampus.edu.np/";
     log(`[scrapePcampusNotice] Scraping ${listUrl}`, 'info');
 
     try {
