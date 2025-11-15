@@ -18,9 +18,9 @@ class NoticeProcessor {
         this.colors = colors;
         // Discord limits
         this.MAX_FILE_SIZE = 25 * 1024 * 1024;
-        this.MAX_TOTAL_ATTACHMENT_SIZE = 25 * 1024 * 1024; 
-        this.ATTACHMENT_CHUNK_SIZE = 10; 
-        this.REQUEST_TIMEOUT = 30000; 
+        this.MAX_TOTAL_ATTACHMENT_SIZE = 25 * 1024 * 1024;
+        this.ATTACHMENT_CHUNK_SIZE = 10;
+        this.REQUEST_TIMEOUT = 30000;
         this.RETRY_ATTEMPTS = 3;
         this.RETRY_DELAY = 2000;
     }
@@ -59,7 +59,7 @@ class NoticeProcessor {
                 try {
                     await this.processNoticeWithRetry(notice, noticeChannel, TEMP_ATTACHMENT_DIR, adminChannel);
                     if (index < noticesToAnnounce.length - 1) {
-                        await this.sleep(1000); 
+                        await this.sleep(1000);
                     }
                 } catch (noticeError) {
                     this.debugConfig.log(`Failed to process notice after retries: ${notice.title}`, 'scheduler', null, noticeError, 'error');
@@ -84,7 +84,7 @@ class NoticeProcessor {
      */
     async processNoticeWithRetry(notice, noticeChannel, tempDir, adminChannel, attempt = 1) {
         let tempFilesOnDisk = [];
-        
+
         try {
             if (!notice?.title || !notice?.link) {
                 throw new Error('Invalid notice object: missing title or link');
@@ -98,8 +98,8 @@ class NoticeProcessor {
             this.debugConfig.log(`Processing new notice (attempt ${attempt}): ${notice.title}`, 'scheduler');
             const noticeEmbed = this.createNoticeEmbed(notice);
             const { attachments, description } = await this.processNoticeAttachments(
-                notice, 
-                tempDir, 
+                notice,
+                tempDir,
                 tempFilesOnDisk
             );
 
@@ -138,9 +138,9 @@ class NoticeProcessor {
         for (const [index, attachmentUrl] of notice.attachments.entries()) {
             try {
                 const result = await this.processSingleAttachment(
-                    attachmentUrl, 
-                    tempDir, 
-                    tempFilesOnDisk, 
+                    attachmentUrl,
+                    tempDir,
+                    tempFilesOnDisk,
                     totalSize
                 );
 
@@ -269,20 +269,21 @@ class NoticeProcessor {
     }
 
     /**
-     * Enhanced PDF processing with size limits
+     * PDF processing with dynamic size detection
      */
     async processPDFWithSizeLimit(fileName, tempFilePath, tempDir, tempFilesOnDisk, currentTotalSize) {
         const MAX_PDF_PAGES = 50;
-        const MAX_PDF_CONVERSION_SIZE = this.MAX_TOTAL_ATTACHMENT_SIZE * 4; 
-        
+        const MAX_PDF_CONVERSION_SIZE = this.MAX_TOTAL_ATTACHMENT_SIZE * 4;
+
         try {
-            // Get PDF page count
             let totalPdfPages = 0;
+            let pdfDocument = null;
+
             try {
                 const pdfBuffer = await fsPromises.readFile(tempFilePath);
                 const uint8Array = new Uint8Array(pdfBuffer);
                 const loadingTask = getDocument({ data: uint8Array });
-                const pdfDocument = await loadingTask.promise;
+                pdfDocument = await loadingTask.promise;
                 totalPdfPages = pdfDocument.numPages;
                 this.debugConfig.log(`PDF ${fileName} has ${totalPdfPages} pages`, 'scheduler');
             } catch (pdfjsError) {
@@ -291,16 +292,61 @@ class NoticeProcessor {
             }
 
             const pagesToConvert = Math.min(totalPdfPages, MAX_PDF_PAGES);
-            
+
             if (pagesToConvert === 0) {
                 return [new AttachmentBuilder(tempFilePath, { name: fileName })];
             }
 
+            let pageWidth = 1240;
+            let pageHeight = 1754;
+
+            try {
+                const firstPage = await pdfDocument.getPage(1);
+                const viewport = firstPage.getViewport({ scale: 1.0 });
+
+                const pdfWidth = viewport.width;
+                const pdfHeight = viewport.height;
+
+                const isLandscape = pdfWidth > pdfHeight;
+
+                const TARGET_DPI = 150; // Balance between quality and file size
+                const POINTS_PER_INCH = 72;
+                const scale = TARGET_DPI / POINTS_PER_INCH;
+
+                pageWidth = Math.round(pdfWidth * scale);
+                pageHeight = Math.round(pdfHeight * scale);
+
+                const MAX_DIMENSION = 3000;
+                if (pageWidth > MAX_DIMENSION || pageHeight > MAX_DIMENSION) {
+                    const scaleFactor = MAX_DIMENSION / Math.max(pageWidth, pageHeight);
+                    pageWidth = Math.round(pageWidth * scaleFactor);
+                    pageHeight = Math.round(pageHeight * scaleFactor);
+                }
+
+                this.debugConfig.log(
+                    `PDF dimensions detected: ${pdfWidth}x${pdfHeight} pts (${isLandscape ? 'landscape' : 'portrait'})`,
+                    'scheduler',
+                    null,
+                    null,
+                    'verbose'
+                );
+                this.debugConfig.log(
+                    `Converting to: ${pageWidth}x${pageHeight} px`,
+                    'scheduler',
+                    null,
+                    null,
+                    'verbose'
+                );
+
+            } catch (dimensionError) {
+                this.debugConfig.log('Could not detect PDF dimensions, using defaults', 'scheduler', null, dimensionError, 'warn');
+            }
+
             const pdfConvertOptions = {
-                density: 300,
-                quality: 90, 
-                height: 1754,
-                width: 1240,
+                density: 200, 
+                quality: 85,  
+                height: pageHeight,
+                width: pageWidth,
                 format: "png",
                 saveFilename: path.parse(fileName).name,
                 savePath: tempDir
@@ -317,15 +363,17 @@ class NoticeProcessor {
                         const pngFilePath = convertResponse.path;
                         const pngFileName = path.basename(pngFilePath);
                         const stats = await fsPromises.stat(pngFilePath);
+
                         if (conversionTotalSize + stats.size > MAX_PDF_CONVERSION_SIZE) {
                             this.debugConfig.log(`Stopping PDF conversion at page ${pageNum} due to size limit`, 'scheduler', null, null, 'warn');
-                            await fsPromises.unlink(pngFilePath); // Clean up this file
+                            await fsPromises.unlink(pngFilePath);
                             break;
                         }
+
                         tempFilesOnDisk.push(pngFilePath);
                         convertedFiles.push(new AttachmentBuilder(pngFilePath, { name: pngFileName }));
                         conversionTotalSize += stats.size;
-                        
+
                         this.debugConfig.log(`Converted PDF page ${pageNum}/${pagesToConvert} (${this.formatFileSize(stats.size)})`, 'scheduler', null, null, 'verbose');
                     } else {
                         this.debugConfig.log(`No valid response for PDF page ${pageNum}`, 'scheduler', null, null, 'warn');
@@ -354,7 +402,7 @@ class NoticeProcessor {
     }
 
     /**
-     * Enhanced notice sending with better chunking and error handling
+     * Notice sending with better chunking and error handling
      */
     async sendNoticeWithChunkedAttachments(noticeChannel, embed, attachments, noticeTitle) {
         if (attachments.length === 0) {
@@ -365,24 +413,24 @@ class NoticeProcessor {
 
         let sentFirstMessage = false;
         const chunkSize = this.ATTACHMENT_CHUNK_SIZE;
-        
+
         for (let i = 0; i < attachments.length; i += chunkSize) {
             const chunk = attachments.slice(i, i + chunkSize);
             const chunkNumber = Math.floor(i / chunkSize) + 1;
             const totalChunks = Math.ceil(attachments.length / chunkSize);
-            
+
             try {
                 if (!sentFirstMessage) {
-                    await this.sendWithRetry(() => 
-                        noticeChannel.send({ 
-                            embeds: [embed], 
-                            files: chunk 
+                    await this.sendWithRetry(() =>
+                        noticeChannel.send({
+                            embeds: [embed],
+                            files: chunk
                         })
                     );
                     sentFirstMessage = true;
                     this.debugConfig.log(`Sent main notice with ${chunk.length} attachments: ${noticeTitle}`, 'scheduler');
                 } else {
-                    await this.sendWithRetry(() => 
+                    await this.sendWithRetry(() =>
                         noticeChannel.send({
                             content: `📎 Additional attachments for "${noticeTitle}" (${chunkNumber}/${totalChunks})`,
                             files: chunk
@@ -390,11 +438,11 @@ class NoticeProcessor {
                     );
                     this.debugConfig.log(`Sent attachment chunk ${chunkNumber}/${totalChunks} (${chunk.length} files)`, 'scheduler');
                 }
-                
+
                 if (i + chunkSize < attachments.length) {
                     await this.sleep(2000);
                 }
-                
+
             } catch (sendError) {
                 this.debugConfig.log(`Error sending notice chunk ${chunkNumber}/${totalChunks}`, 'scheduler', null, sendError, 'error');
                 throw sendError;
@@ -413,7 +461,7 @@ class NoticeProcessor {
                 if (attempt === maxAttempts || !this.shouldRetry(error)) {
                     throw error;
                 }
-                
+
                 const delay = this.RETRY_DELAY * Math.pow(2, attempt - 1); // Exponential backoff
                 this.debugConfig.log(`Retrying send operation (${attempt}/${maxAttempts}) in ${delay}ms`, 'scheduler', null, null, 'warn');
                 await this.sleep(delay);
@@ -424,15 +472,15 @@ class NoticeProcessor {
     /**
      * Utility methods
      */
-    
+
     shouldRetry(error) {
         const retryableCodes = ['ECONNABORTED', 'TIMEOUT', 'ENOTFOUND', 'ECONNRESET', 'EPIPE'];
         const retryableStatusCodes = [429, 500, 502, 503, 504];
         return retryableCodes.includes(error.code) ||
-               retryableStatusCodes.includes(error.status) ||
-               error.message?.includes('aborted') ||
-               error.message?.includes('timeout') ||
-               error.message?.includes('network');
+            retryableStatusCodes.includes(error.status) ||
+            error.message?.includes('aborted') ||
+            error.message?.includes('timeout') ||
+            error.message?.includes('network');
     }
 
     sanitizeFileName(fileName) {
@@ -487,8 +535,8 @@ class NoticeProcessor {
     }
 
     async fetchChannelsWithTimeout(noticeChannelId, adminChannelId) {
-        const fetchTimeout = 10000; 
-        
+        const fetchTimeout = 10000;
+
         try {
             const noticeChannel = await Promise.race([
                 this.client.channels.fetch(noticeChannelId),
@@ -514,8 +562,8 @@ class NoticeProcessor {
     }
 
     async scrapeNoticesWithTimeout() {
-        const scrapeTimeout = 60000; 
-        
+        const scrapeTimeout = 60000;
+
         try {
             return await Promise.race([
                 scrapeLatestNotice(),

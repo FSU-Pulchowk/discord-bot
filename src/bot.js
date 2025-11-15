@@ -108,7 +108,7 @@ class PulchowkBot {
                 Partials.GuildMember
             ],
             rest: {
-                requestTimeout: 60000 
+                requestTimeout: 60000
             }
         });
 
@@ -123,13 +123,14 @@ class PulchowkBot {
         this.spamWarnings = new Map();
         this.voiceStates = new Map();
         this.rateLimitMap = new Map();
-        this.interactionStates = new Map(); 
+        this.interactionStates = new Map();
 
         this._initializeCommands();
         this._registerEventListeners();
-}
+    }
+
     /**
-     * Initializes and loads all slash commands with better error handling.
+     * Initializes and loads all slash commands with comprehensive error handling
      * @private
      */
     async _initializeCommands() {
@@ -139,40 +140,122 @@ class PulchowkBot {
         try {
             if (!fs.existsSync(commandsPath)) {
                 this.debugConfig.log(`Commands directory not found: ${commandsPath}`, 'command', null, null, 'error');
-                return;
+                throw new Error(`Commands directory does not exist: ${commandsPath}`);
             }
 
             const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-            this.debugConfig.log(`Found ${commandFiles.length} command files`, 'command', { files: commandFiles }, null, 'verbose');
+            this.debugConfig.log(`Found ${commandFiles.length} command files`, 'command', { files: commandFiles });
 
-            const importPromises = commandFiles.map(async file => {
+            // Track loading results
+            const loadResults = {
+                success: [],
+                failed: [],
+                skipped: []
+            };
+
+            for (const file of commandFiles) {
                 const filePath = path.join(commandsPath, file);
                 try {
                     const commandModule = await import(`file://${filePath}`);
-                    
-                    if (!commandModule.data || !commandModule.execute) {
-                        this.debugConfig.log(`Invalid command structure in ${file}: missing data or execute`, 'command', { file }, null, 'warn');
-                        return;
+
+                    if (!commandModule.data) {
+                        loadResults.skipped.push({ file, reason: 'Missing data export' });
+                        this.debugConfig.log(`Skipping ${file}: missing data export`, 'command', null, null, 'warn');
+                        continue;
                     }
 
-                    if (!commandModule.data.name || typeof commandModule.execute !== 'function') {
-                        this.debugConfig.log(`Invalid command in ${file}: missing name or execute function`, 'command', { file }, null, 'warn');
-                        return;
+                    if (!commandModule.execute) {
+                        loadResults.skipped.push({ file, reason: 'Missing execute export' });
+                        this.debugConfig.log(`Skipping ${file}: missing execute export`, 'command', null, null, 'warn');
+                        continue;
+                    }
+
+                    if (!commandModule.data.name) {
+                        loadResults.skipped.push({ file, reason: 'Missing command name' });
+                        this.debugConfig.log(`Skipping ${file}: missing command name`, 'command', null, null, 'warn');
+                        continue;
+                    }
+
+                    if (typeof commandModule.execute !== 'function') {
+                        loadResults.skipped.push({ file, reason: 'execute is not a function' });
+                        this.debugConfig.log(`Skipping ${file}: execute is not a function`, 'command', null, null, 'warn');
+                        continue;
+                    }
+
+                    if (this.client.commands.has(commandModule.data.name)) {
+                        loadResults.skipped.push({
+                            file,
+                            reason: `Duplicate command name: ${commandModule.data.name}`
+                        });
+                        this.debugConfig.log(
+                            `Skipping ${file}: duplicate command name ${commandModule.data.name}`,
+                            'command',
+                            null,
+                            null,
+                            'warn'
+                        );
+                        continue;
+                    }
+
+                    let commandJSON;
+                    try {
+                        commandJSON = commandModule.data.toJSON();
+                    } catch (jsonError) {
+                        loadResults.failed.push({ file, error: 'Failed to serialize command', details: jsonError.message });
+                        this.debugConfig.log(`Failed to serialize ${file}`, 'command', { file }, jsonError, 'error');
+                        continue;
                     }
 
                     this.client.commands.set(commandModule.data.name, commandModule);
-                    this.commandFiles.push(commandModule.data.toJSON());
-                    this.debugConfig.log(`Successfully loaded command: ${commandModule.data.name}`, 'command', null, null, 'verbose');
-                    
-                } catch (error) {
-                    this.debugConfig.log(`Failed to load command from ${file}:`, 'command', { file }, error, 'error');
-                }
-            });
+                    this.commandFiles.push(commandJSON);
+                    loadResults.success.push({ file, name: commandModule.data.name });
 
-            await Promise.allSettled(importPromises);
+                    this.debugConfig.log(
+                        `✓ Loaded command: ${commandModule.data.name}`,
+                        'command',
+                        { file, name: commandModule.data.name },
+                        null,
+                        'verbose'
+                    );
+
+                } catch (error) {
+                    loadResults.failed.push({ file, error: error.message, stack: error.stack });
+                    this.debugConfig.log(`Failed to load ${file}`, 'command', { file }, error, 'error');
+                }
+            }
+            this.debugConfig.log(
+                `Command loading complete: ${loadResults.success.length} loaded, ${loadResults.skipped.length} skipped, ${loadResults.failed.length} failed`,
+                'command',
+                {
+                    success: loadResults.success.map(r => r.name),
+                    skipped: loadResults.skipped.map(r => r.file),
+                    failed: loadResults.failed.map(r => r.file)
+                }
+            );
+
+            if (loadResults.failed.length > 0) {
+                console.error('\n❌ Failed to load commands:');
+                loadResults.failed.forEach(f => {
+                    console.error(`  - ${f.file}: ${f.error}`);
+                });
+            }
+
+            if (loadResults.skipped.length > 0) {
+                console.warn('\n⚠️ Skipped commands:');
+                loadResults.skipped.forEach(s => {
+                    console.warn(`  - ${s.file}: ${s.reason}`);
+                });
+            }
+
+            if (this.client.commands.size === 0) {
+                throw new Error('No commands were successfully loaded!');
+            }
+
             this.debugConfig.log(`Successfully loaded ${this.client.commands.size} commands.`, 'command');
+
         } catch (error) {
-            this.debugConfig.log('Error during command initialization:', 'command', null, error, 'error');
+            this.debugConfig.log('Critical error during command initialization:', 'command', null, error, 'error');
+            throw error; // Re-throw to halt bot startup
         }
     }
 
@@ -180,13 +263,13 @@ class PulchowkBot {
      * Registers all Discord.js event listeners
      * @private
      */
-    _registerEventListeners() {
+    async _registerEventListeners() {
         this.debugConfig.log('Registering event listeners...', 'event');
-        
+
         this.client.once(Events.ClientReady, async c => {
             this.debugConfig.log(`Bot is ready! Logged in as ${c.user.tag}`, 'client', { userId: c.user.id });
             c.user.setActivity('for new RSS feeds', { type: 'WATCHING' });
-            
+
             try {
                 this.noticeProcessor = new NoticeProcessor(this.client, this.debugConfig, this.colors);
                 this.debugConfig.log('NoticeProcessor initialized successfully', 'client', null, null, 'success');
@@ -199,7 +282,10 @@ class PulchowkBot {
                 this.debugConfig.log('Error during bot initialization:', 'client', null, error, 'error');
             }
         });
-        this.client.on(Events.InteractionCreate, this._safeEventHandler('InteractionCreate', this._onInteractionCreate.bind(this)));
+        // this.client.on(Events.InteractionCreate, this._safeEventHandler('InteractionCreate', this._onInteractionCreate.bind(this)));
+        const interactionHandler = await import('./events/interactionCreate.js');
+        this.client.on(Events.InteractionCreate, (...args) => interactionHandler.execute(...args));
+        this.debugConfig.log('✓ Loaded interaction handler', 'event', null, null, 'success');
         this.client.on(Events.VoiceStateUpdate, this._safeEventHandler('VoiceStateUpdate', this._onVoiceStateUpdate.bind(this)));
         this.client.on(Events.MessageCreate, this._safeEventHandler('MessageCreate', this._onMessageCreate.bind(this)));
         this.client.on(Events.GuildMemberAdd, this._safeEventHandler('GuildMemberAdd', this._onGuildMemberAdd.bind(this)));
@@ -229,7 +315,7 @@ class PulchowkBot {
     }
 
     /**
-     * Registers slash commands with Discord API.
+     * Registers slash commands with Discord API with retry logic
      * @private
      */
     async _registerSlashCommands() {
@@ -237,26 +323,120 @@ class PulchowkBot {
         const clientId = process.env.CLIENT_ID;
 
         if (!token || !clientId) {
-            this.debugConfig.log('BOT_TOKEN or CLIENT_ID missing. Cannot register commands.', 'init', null, new Error('Missing credentials'), 'error');
-            return;
+            const error = new Error('BOT_TOKEN or CLIENT_ID missing from environment variables');
+            this.debugConfig.log('Cannot register commands: missing credentials', 'command', null, error, 'error');
+            throw error;
         }
 
         if (this.commandFiles.length === 0) {
-            this.debugConfig.log('No commands to register.', 'command', null, null, 'warn');
+            this.debugConfig.log('No commands to register - command files array is empty', 'command', null, null, 'warn');
             return;
         }
 
-        const rest = new REST({ version: '10' }).setToken(token);
-        this.debugConfig.log('Started refreshing application (/) commands.', 'command');
+        const rest = new REST({ version: '10', timeout: 60000 }).setToken(token);
+
+        this.debugConfig.log(
+            `Registering ${this.commandFiles.length} commands with Discord...`,
+            'command',
+            { count: this.commandFiles.length, commands: this.commandFiles.map(c => c.name) }
+        );
+
+        const maxRetries = 3;
+        let lastError;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                this.debugConfig.log(`Registration attempt ${attempt}/${maxRetries}`, 'command');
+
+                const data = await rest.put(
+                    Routes.applicationCommands(clientId),
+                    { body: this.commandFiles }
+                );
+
+                this.debugConfig.log(
+                    `✅ Successfully registered ${data.length} application commands globally`,
+                    'command',
+                    { registered: data.map(c => c.name) },
+                    null,
+                    'success'
+                );
+
+                const registeredCommands = await rest.get(Routes.applicationCommands(clientId));
+                this.debugConfig.log(
+                    `Verified ${registeredCommands.length} commands are now live on Discord`,
+                    'command',
+                    { commands: registeredCommands.map(c => c.name) }
+                );
+
+                return;
+
+            } catch (error) {
+                lastError = error;
+                this.debugConfig.log(
+                    `Registration attempt ${attempt} failed`,
+                    'command',
+                    { attempt, maxRetries },
+                    error,
+                    'error'
+                );
+
+                if (error.code === 50035) {
+                    this.debugConfig.log(
+                        'Invalid command structure detected',
+                        'command',
+                        {
+                            error: error.message,
+                            rawError: error.rawError
+                        },
+                        error,
+                        'error'
+                    );
+
+                    if (error.rawError?.errors) {
+                        console.error('Command validation errors:', JSON.stringify(error.rawError.errors, null, 2));
+                    }
+
+                    throw error;
+                }
+
+                if (error.code === 401) {
+                    throw new Error('Invalid BOT_TOKEN - authentication failed');
+                }
+                if (attempt < maxRetries) {
+                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+                    this.debugConfig.log(`Waiting ${delay}ms before retry...`, 'command');
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        throw new Error(`Failed to register commands after ${maxRetries} attempts: ${lastError.message}`);
+    }
+
+    /**
+    * helper method to force refresh commands (useful for debugging)
+    * @private
+    */
+    async _forceRefreshCommands() {
+        this.debugConfig.log('Force refreshing commands...', 'command');
+
+        const rest = new REST({ version: '10' }).setToken(this.token);
+        const clientId = process.env.CLIENT_ID;
 
         try {
-            const data = await rest.put(
-                Routes.applicationCommands(clientId),
-                { body: this.commandFiles }
-            );
-            this.debugConfig.log(`Successfully reloaded ${data.length} application (/) commands globally.`, 'command');
+            // Clear all global commands
+            await rest.put(Routes.applicationCommands(clientId), { body: [] });
+            this.debugConfig.log('Cleared all existing commands', 'command');
+
+            // Wait a moment
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Re-register
+            await this._registerSlashCommands();
+            this.debugConfig.log('Commands force-refreshed successfully', 'command', null, null, 'success');
+
         } catch (error) {
-            this.debugConfig.log('Failed to register application commands', 'command', null, error, 'error');
+            this.debugConfig.log('Failed to force refresh commands', 'command', null, error, 'error');
+            throw error;
         }
     }
 
@@ -271,7 +451,7 @@ class PulchowkBot {
                     this.debugConfig.log('Error loading active voice sessions:', 'client', null, err, 'error');
                     return reject(err);
                 }
-                
+
                 rows.forEach(row => {
                     this.voiceStates.set(row.user_id, {
                         guildId: row.guild_id,
@@ -279,7 +459,7 @@ class PulchowkBot {
                         joinTime: row.join_time
                     });
                 });
-                
+
                 this.debugConfig.log(`Loaded ${rows.length} active voice sessions.`, 'client', { count: rows.length });
                 resolve();
             });
@@ -287,12 +467,12 @@ class PulchowkBot {
     }
 
     /**
-     * Enhanced interaction handler
+     * Interaction handler
      */
     async _onInteractionCreate(interaction) {
         const startTime = Date.now();
         const interactionKey = `${interaction.id}`;
-        
+
         if (this.interactionStates.has(interactionKey)) {
             this.debugConfig.log('Duplicate interaction detected, skipping', 'interaction', { id: interaction.id }, null, 'warn');
             return;
@@ -408,11 +588,11 @@ class PulchowkBot {
      */
     async _handleWarnButtons(interaction) {
         const customId = interaction.customId;
-        
+
         if (customId === 'confirm_warn' || customId === 'cancel_warn') {
             return true;
         }
-        
+
         return false;
     }
     /**
@@ -505,7 +685,7 @@ class PulchowkBot {
      */
     async _handleSuggestionButtons(interaction) {
         const customId = interaction.customId;
-        
+
         if (customId === 'confirm_suggestion' || customId === 'cancel_suggestion') {
             await this._ensureDeferred(interaction, true);
             return true;
@@ -641,7 +821,7 @@ class PulchowkBot {
      */
     async _handleVerificationModals(interaction) {
         const customId = interaction.customId;
-        
+
         if (customId === 'verifyModal') {
             const verifyCmd = this.client.commands.get('verify');
             if (verifyCmd && typeof verifyCmd.handleModalSubmit === 'function') {
@@ -654,7 +834,7 @@ class PulchowkBot {
             }
             return true;
         }
-        
+
         if (customId === 'confirmOtpModal') {
             const confirmOtpCmd = this.client.commands.get('confirmotp');
             if (confirmOtpCmd && typeof confirmOtpCmd.handleModalSubmit === 'function') {
@@ -667,7 +847,7 @@ class PulchowkBot {
             }
             return true;
         }
-        
+
         return false;
     }
 
@@ -677,21 +857,21 @@ class PulchowkBot {
      */
     async _handleSuggestionModals(interaction) {
         const customId = interaction.customId;
-        
+
         if (customId.startsWith('deny_reason_modal_')) {
             const suggestionId = customId.split('_')[3];
             const reason = interaction.fields.getTextInputValue('denyReasonInput');
             await this._processSuggestionDenial(interaction, suggestionId, reason);
             return true;
         }
-        
+
         if (customId.startsWith('delete_reason_modal_')) {
             const suggestionId = customId.split('_')[3];
             const reason = interaction.fields.getTextInputValue('deleteReasonInput');
             await this._processSuggestionDelete(interaction, suggestionId, reason);
             return true;
         }
-        
+
         return false;
     }
 
@@ -700,9 +880,9 @@ class PulchowkBot {
      * @private
      */
     async _handleUnknownInteraction(interaction) {
-        this.debugConfig.log(`Unknown interaction type: ${interaction.type}`, 'interaction', { 
-            user: interaction.user.tag, 
-            type: interaction.type 
+        this.debugConfig.log(`Unknown interaction type: ${interaction.type}`, 'interaction', {
+            user: interaction.user.tag,
+            type: interaction.type
         }, null, 'warn');
     }
 
@@ -801,21 +981,21 @@ class PulchowkBot {
             return true;
         } catch (error) {
             if (error.code === 10062) {
-                this.debugConfig.log('Interaction expired before deferring', 'interaction', { 
+                this.debugConfig.log('Interaction expired before deferring', 'interaction', {
                     customId: interaction.customId,
-                    type: interaction.type 
+                    type: interaction.type
                 }, null, 'warn');
                 return false;
             }
-            
+
             if (error.code === 40060) {
-                this.debugConfig.log('Interaction already acknowledged', 'interaction', { 
+                this.debugConfig.log('Interaction already acknowledged', 'interaction', {
                     customId: interaction.customId,
-                    type: interaction.type 
+                    type: interaction.type
                 }, null, 'warn');
                 return true;
             }
-            
+
             throw error;
         }
     }
@@ -1137,7 +1317,7 @@ class PulchowkBot {
             if (reactionRole) {
                 const member = reaction.message.guild.members.cache.get(user.id);
                 const role = reaction.message.guild.roles.cache.get(reactionRole.role_id);
-                
+
                 if (member && role && !member.roles.cache.has(role.id)) {
                     await member.roles.add(role, 'Reaction role assignment');
                 }
@@ -1179,7 +1359,7 @@ class PulchowkBot {
             if (reactionRole) {
                 const member = reaction.message.guild.members.cache.get(user.id);
                 const role = reaction.message.guild.roles.cache.get(reactionRole.role_id);
-                
+
                 if (member && role && member.roles.cache.has(role.id)) {
                     await member.roles.remove(role, 'Reaction role removal');
                 }
@@ -1234,7 +1414,7 @@ class PulchowkBot {
                 if (message.embeds[0]) {
                     const updatedEmbed = EmbedBuilder.from(message.embeds[0])
                         .setFooter({ text: `Suggestion ID: ${suggestion.id} | Votes: 👍 ${upvotes} / 👎 ${downvotes}` });
-                    
+
                     await message.edit({ embeds: [updatedEmbed] });
                 }
             }
@@ -1401,12 +1581,12 @@ class PulchowkBot {
             });
             const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
             const message = await suggestionsChannel?.messages.fetch(suggestionRow.message_id).catch(() => null);
-            
+
             if (message?.embeds[0]) {
                 const updatedEmbed = EmbedBuilder.from(message.embeds[0])
                     .setColor(this.colors.error)
                     .addFields({ name: 'Status', value: `Denied by ${interaction.user.tag}\n**Reason:** ${reason}` });
-                
+
                 await message.edit({ embeds: [updatedEmbed], components: [] });
             }
             await this._safeReply(interaction, {
@@ -1450,7 +1630,7 @@ class PulchowkBot {
             });
             const suggestionsChannel = this.client.channels.cache.get(process.env.SUGGESTIONS_CHANNEL_ID);
             const message = await suggestionsChannel?.messages.fetch(suggestionRow.message_id).catch(() => null);
-            
+
             if (message) {
                 await message.delete(`Deleted by ${interaction.user.tag}. Reason: ${reason}`);
             }
@@ -1537,7 +1717,7 @@ class PulchowkBot {
             await this.noticeProcessor.checkAndAnnounceNotices();
         } catch (error) {
             this.debugConfig.log('Error in enhanced notice processing', 'scheduler', null, error, 'error');
-            
+
             const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
             if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
                 try {
@@ -1556,10 +1736,10 @@ class PulchowkBot {
      */
     async _processPDFAttachment(fileName, tempFilePath, tempDir, allFiles, tempFilesOnDisk) {
         const MAX_PDF_PAGES_TO_CONVERT = Infinity;
-        
+
         try {
             let totalPdfPages = 0;
-            
+
             // Get PDF page count
             try {
                 const pdfBuffer = await fsPromises.readFile(tempFilePath);
@@ -1629,7 +1809,7 @@ class PulchowkBot {
      */
     async _sendNoticeWithAttachments(noticeChannel, embed, attachments, noticeTitle) {
         const ATTACHMENT_LIMIT = 10;
-        
+
         if (attachments.length === 0) {
             await noticeChannel.send({ embeds: [embed] });
             this.debugConfig.log(`Sent notice without attachments: ${noticeTitle}`, 'scheduler');
@@ -1637,10 +1817,10 @@ class PulchowkBot {
         }
 
         let sentFirstMessage = false;
-        
+
         for (let i = 0; i < attachments.length; i += ATTACHMENT_LIMIT) {
             const chunk = attachments.slice(i, i + ATTACHMENT_LIMIT);
-            
+
             try {
                 if (!sentFirstMessage) {
                     await noticeChannel.send({ embeds: [embed], files: chunk });
@@ -1651,7 +1831,7 @@ class PulchowkBot {
                         files: chunk
                     });
                 }
-                
+
                 this.debugConfig.log(`Sent chunk of ${chunk.length} attachments for "${noticeTitle}"`, 'scheduler');
             } catch (sendError) {
                 this.debugConfig.log(`Error sending notice chunk ${i / ATTACHMENT_LIMIT + 1}`, 'scheduler', null, sendError, 'error');
@@ -1667,7 +1847,7 @@ class PulchowkBot {
     async _announceBirthdays() {
         this.debugConfig.log('Checking for birthdays...', 'scheduler');
         const BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID = process.env.BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID;
-        
+
         if (!BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID) {
             this.debugConfig.log('Birthday announcement channel not configured', 'scheduler', null, null, 'warn');
             return;
@@ -1741,7 +1921,7 @@ class PulchowkBot {
      */
     async start() {
         this.debugConfig.log('Starting bot...', 'init');
-        
+
         try {
             await writeServiceAccountKey();
             await this.client.login(this.token);
@@ -1758,7 +1938,7 @@ class PulchowkBot {
      */
     async shutdown() {
         this.debugConfig.log('Initiating bot shutdown...', 'shutdown');
-        
+
         try {
             schedule.gracefulShutdown();
             if (this.client.db) {

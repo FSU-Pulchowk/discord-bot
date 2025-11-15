@@ -242,7 +242,7 @@ class DebugConfig {
 			case '--debug-no-sanitize':
 			case '-dns':
 			this.sanitizeData = false;
-			console.warn('⚠️  WARNING: Data sanitization disabled. Sensitive data may be logged!');
+			console.warn('WARNING: Data sanitization disabled. Sensitive data may be logged!');
 			break;
 			case '--debug-max-length':
 			case '-dml':
@@ -334,7 +334,6 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 
 		this._outputDebug(debugMsg);
 
-		// Always sanitize and limit data before logging, regardless of log level
 		if (data !== null) {
 			const sanitizedData = this._sanitizeData(data);
 			const limitedData = this._limitDataLength(sanitizedData);
@@ -344,7 +343,6 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 		if (error) {
 		this._outputDebug(`[ERROR] ${error.message}`);
 		if (this.showStack || level === 'trace') {
-			// Sanitize stack traces as they might contain file paths or sensitive info
 			const sanitizedStack = this.sanitizeData ? 
 				error.stack.replace(/\/[^\s]+\//g, '/***PATH***/') : 
 				error.stack;
@@ -363,11 +361,10 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 	logSensitive(message, category = 'general', sensitiveData = null, level = 'trace') {
 		if (!this.enabled) return;
 		
-		console.warn('⚠️  SECURITY WARNING: Logging potentially sensitive data');
+		console.warn('WARNING: Logging potentially sensitive data');
 		this.log(`${message} [SENSITIVE DATA FOLLOWS]`, category, null, null, level);
 		
 		if (sensitiveData !== null) {
-			// Force sanitization even if disabled globally
 			const sanitizedData = this._sanitizeData(sensitiveData);
 			this._outputDebug(`[SENSITIVE_DATA]`, sanitizedData);
 		}
