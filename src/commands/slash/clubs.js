@@ -1,6 +1,9 @@
 // src/commands/slash/clubs.js
 import { SlashCommandBuilder, EmbedBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import { db } from '../../database.js';
+import { promises as fs } from 'fs';
+import path from 'path';
+import axios from 'axios';
 
 export const data = new SlashCommandBuilder()
     .setName('clubs')
@@ -138,15 +141,15 @@ export async function execute(interaction) {
  */
 async function handleBrowse(interaction) {
     await interaction.deferReply();
-    
+
     const category = interaction.options.getString('category') || 'all';
     const guildId = interaction.guild.id;
 
     try {
-        const query = category === 'all' 
+        const query = category === 'all'
             ? `SELECT * FROM clubs WHERE guild_id = ? AND status = 'active' ORDER BY name`
             : `SELECT * FROM clubs WHERE guild_id = ? AND category = ? AND status = 'active' ORDER BY name`;
-        
+
         const params = category === 'all' ? [guildId] : [guildId, category];
 
         const clubs = await new Promise((resolve, reject) => {
@@ -182,10 +185,10 @@ async function handleBrowse(interaction) {
             .setTimestamp();
 
         clubsWithCounts.forEach(club => {
-            const capacityInfo = club.max_members 
-                ? `${club.memberCount}/${club.max_members} members` 
+            const capacityInfo = club.max_members
+                ? `${club.memberCount}/${club.max_members} members`
                 : `${club.memberCount} members`;
-            
+
             embed.addFields({
                 name: `${club.name} (${club.category})`,
                 value: `${club.description?.substring(0, 100) || 'No description'}...\n👥 ${capacityInfo}`,
@@ -208,7 +211,7 @@ async function handleBrowse(interaction) {
  */
 async function handleInfo(interaction) {
     await interaction.deferReply();
-    
+
     const clubName = interaction.options.getString('club_name');
     const guildId = interaction.guild.id;
 
@@ -281,10 +284,10 @@ async function handleInfo(interaction) {
         }
 
         if (club.meeting_day && club.meeting_time) {
-            embed.addFields({ 
-                name: '📅 Regular Meetings', 
-                value: `${club.meeting_day}s at ${club.meeting_time}`, 
-                inline: true 
+            embed.addFields({
+                name: '📅 Regular Meetings',
+                value: `${club.meeting_day}s at ${club.meeting_time}`,
+                inline: true
             });
         }
 
@@ -313,7 +316,7 @@ async function handleInfo(interaction) {
  */
 async function handleMyClubs(interaction) {
     await interaction.deferReply({ ephemeral: true });
-    
+
     const userId = interaction.user.id;
     const guildId = interaction.guild.id;
 
@@ -346,13 +349,13 @@ async function handleMyClubs(interaction) {
         memberships.forEach(membership => {
             const roleDisplay = membership.role === 'member' ? 'Member' : membership.role.charAt(0).toUpperCase() + membership.role.slice(1);
             const joinedDate = new Date(membership.joined_at * 1000).toLocaleDateString();
-            
+
             embed.addFields({
                 name: `${membership.name} (${roleDisplay})`,
                 value: `**Category:** ${membership.category}\n` +
-                       `**Joined:** ${joinedDate}\n` +
-                       `**Attendance:** ${membership.attendance_count} meetings\n` +
-                       `**Points:** ${membership.contribution_points}`,
+                    `**Joined:** ${joinedDate}\n` +
+                    `**Attendance:** ${membership.attendance_count} meetings\n` +
+                    `**Points:** ${membership.contribution_points}`,
                 inline: true
             });
         });
@@ -370,13 +373,13 @@ async function handleMyClubs(interaction) {
  */
 async function handleEvents(interaction) {
     await interaction.deferReply();
-    
+
     const clubName = interaction.options.getString('club_name');
     const guildId = interaction.guild.id;
 
     try {
         let query, params;
-        
+
         if (clubName) {
             query = `SELECT e.*, c.name as club_name 
                      FROM club_events e
@@ -426,17 +429,17 @@ async function handleEvents(interaction) {
             });
 
             const eventType = event.event_type.charAt(0).toUpperCase() + event.event_type.slice(1);
-            const attendeeInfo = event.max_attendees 
-                ? `${rsvpCount}/${event.max_attendees} attending` 
+            const attendeeInfo = event.max_attendees
+                ? `${rsvpCount}/${event.max_attendees} attending`
                 : `${rsvpCount} attending`;
 
             embed.addFields({
                 name: `${event.title} [${event.club_name}]`,
                 value: `**Type:** ${eventType}\n` +
-                       `**Date:** ${event.date} at ${event.start_time || 'TBA'}\n` +
-                       `**Location:** ${event.location || 'TBA'}\n` +
-                       `**Attendees:** ${attendeeInfo}\n` +
-                       `${event.description ? `*${event.description.substring(0, 100)}...*` : ''}`,
+                    `**Date:** ${event.date} at ${event.start_time || 'TBA'}\n` +
+                    `**Location:** ${event.location || 'TBA'}\n` +
+                    `**Attendees:** ${attendeeInfo}\n` +
+                    `${event.description ? `*${event.description.substring(0, 100)}...*` : ''}`,
                 inline: false
             });
         }
@@ -458,7 +461,7 @@ async function handleSync(interaction) {
     }
 
     await interaction.deferReply({ ephemeral: true });
-    
+
     const syncType = interaction.options.getString('sync_type');
     const attachment = interaction.options.getAttachment('file');
 
@@ -467,40 +470,33 @@ async function handleSync(interaction) {
     }
 
     try {
-        // Download file
-        const fs = require('fs');
-        const path = require('path');
-        const axios = require('axios');
-        
         const tempDir = path.join(process.cwd(), 'temp_excel_sync');
-        if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
+        try {
+            await fs.mkdir(tempDir, { recursive: true });
+        } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
         }
 
         const tempFilePath = path.join(tempDir, `${syncType}_${Date.now()}_${attachment.name}`);
-        
+
         const response = await axios({
             method: 'GET',
             url: attachment.url,
-            responseType: 'stream'
+            responseType: 'arraybuffer'
         });
 
-        const writer = fs.createWriteStream(tempFilePath);
-        response.data.pipe(writer);
+        await fs.writeFile(tempFilePath, response.data);
 
-        await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
-
-        // Import service and sync
         const { ClubExcelService } = await import('../../services/clubExcelService.js');
         const excelService = new ClubExcelService(interaction.client);
-        
+
         const result = await excelService.syncFromExcel(syncType, tempFilePath);
 
-        // Clean up temp file
-        fs.unlinkSync(tempFilePath);
+        try {
+            await fs.unlink(tempFilePath);
+        } catch (cleanupErr) {
+            console.error('Error cleaning up temp file:', cleanupErr);
+        }
 
         if (result.success) {
             const embed = new EmbedBuilder()
@@ -531,6 +527,7 @@ async function handleSync(interaction) {
     }
 }
 
+
 /**
  * Admin: Export data to Excel
  */
@@ -540,23 +537,22 @@ async function handleExport(interaction) {
     }
 
     await interaction.deferReply({ ephemeral: true });
-    
+
     const exportType = interaction.options.getString('export_type');
 
     try {
         const { ClubExcelService } = await import('../../services/clubExcelService.js');
         const excelService = new ClubExcelService(interaction.client);
-        
-        const fs = require('fs');
-        const path = require('path');
-        
+
         const exportDir = path.join(process.cwd(), 'exports');
-        if (!fs.existsSync(exportDir)) {
-            fs.mkdirSync(exportDir, { recursive: true });
+        try {
+            await fs.mkdir(exportDir, { recursive: true });
+        } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
         }
 
         const outputPath = path.join(exportDir, `${exportType}_${Date.now()}.xlsx`);
-        
+
         const result = await excelService.exportToExcel(exportType, outputPath);
 
         if (result.success) {
@@ -565,10 +561,9 @@ async function handleExport(interaction) {
                 files: [outputPath]
             });
 
-            // Clean up after sending
-            setTimeout(() => {
+            setTimeout(async () => {
                 try {
-                    fs.unlinkSync(outputPath);
+                    await fs.unlink(outputPath);
                 } catch (e) {
                     console.error('Error cleaning up export file:', e);
                 }
@@ -582,7 +577,6 @@ async function handleExport(interaction) {
         await interaction.editReply({ content: `❌ An error occurred: ${error.message}` });
     }
 }
-
 /**
  * Admin: Approve pending club
  */
@@ -592,7 +586,7 @@ async function handleApprove(interaction) {
     }
 
     await interaction.deferReply({ ephemeral: true });
-    
+
     const clubId = interaction.options.getInteger('club_id');
 
     try {
@@ -653,7 +647,7 @@ async function handleApprove(interaction) {
             try {
                 const president = await guild.members.fetch(club.president_user_id);
                 await president.roles.add(createdResources.role, 'Club approved - president role');
-                
+
                 // Add president as member in database
                 await new Promise((resolve, reject) => {
                     db.run(
@@ -677,11 +671,12 @@ async function handleApprove(interaction) {
                         { name: '📢 Text Channel', value: `<#${createdResources.textChannel.id}>`, inline: true },
                         { name: '🎤 Voice Channel', value: `<#${createdResources.voiceChannel.id}>`, inline: true },
                         { name: '👥 Club Role', value: `<@&${createdResources.role.id}>`, inline: true },
-                        { name: '📋 Next Steps', value: 
-                            '1. Share the club join form with students\n' +
-                            '2. Post your first announcement\n' +
-                            '3. Schedule your first meeting\n' +
-                            '4. Build your team!',
+                        {
+                            name: '📋 Next Steps', value:
+                                '1. Share the club join form with students\n' +
+                                '2. Post your first announcement\n' +
+                                '3. Schedule your first meeting\n' +
+                                '4. Build your team!',
                             inline: false
                         }
                     )
@@ -705,8 +700,8 @@ async function handleApprove(interaction) {
                 }
 
                 if (club.meeting_day && club.meeting_time) {
-                    channelWelcome.addFields({ 
-                        name: '📅 Regular Meetings', 
+                    channelWelcome.addFields({
+                        name: '📅 Regular Meetings',
                         value: `${club.meeting_day}s at ${club.meeting_time}`,
                         inline: false
                     });
@@ -715,7 +710,7 @@ async function handleApprove(interaction) {
                 channelWelcome.addFields({
                     name: '🎯 Getting Started',
                     value: 'Fill out the join form to become a member!\n' +
-                           'Stay tuned for upcoming events and activities.',
+                        'Stay tuned for upcoming events and activities.',
                     inline: false
                 });
 
@@ -870,7 +865,7 @@ async function handlePending(interaction) {
     }
 
     await interaction.deferReply({ ephemeral: true });
-    
+
     const guildId = interaction.guild.id;
 
     try {
@@ -901,20 +896,20 @@ async function handlePending(interaction) {
 
         for (const club of pendingClubs.slice(0, 10)) { // Limit to 10 to avoid embed limits
             const createdDate = new Date(club.created_at * 1000).toLocaleDateString();
-            
+
             let fieldValue = `**Description:** ${club.description?.substring(0, 100) || 'None'}...\n`;
             fieldValue += `**Category:** ${club.category}\n`;
             fieldValue += `**President:** ${club.president_name || 'Unknown'}\n`;
             fieldValue += `**Email:** ${club.president_email || 'Unknown'}\n`;
-            
+
             if (club.advisor_name) {
                 fieldValue += `**Advisor:** ${club.advisor_name}\n`;
             }
-            
+
             if (club.max_members) {
                 fieldValue += `**Max Members:** ${club.max_members}\n`;
             }
-            
+
             fieldValue += `**Submitted:** ${createdDate}\n`;
             fieldValue += `\n**To Approve:** \`/clubs approve club_id:${club.id}\``;
             fieldValue += `\n**To Reject:** \`/clubs reject club_id:${club.id}\``;
@@ -947,7 +942,7 @@ async function handleReject(interaction) {
     }
 
     await interaction.deferReply({ ephemeral: true });
-    
+
     const clubId = interaction.options.getInteger('club_id');
     const reason = interaction.options.getString('reason');
 
@@ -991,18 +986,19 @@ async function handleReject(interaction) {
         if (club.president_user_id) {
             try {
                 const president = await interaction.client.users.fetch(club.president_user_id);
-                
+
                 const rejectionEmbed = new EmbedBuilder()
                     .setColor('#FF0000')
                     .setTitle('❌ Club Registration Not Approved')
                     .setDescription(`Unfortunately, your club registration for **${club.name}** has not been approved.`)
                     .addFields(
                         { name: 'Reason', value: reason, inline: false },
-                        { name: 'Next Steps', value: 
-                            '• Review the feedback provided\n' +
-                            '• Make necessary adjustments\n' +
-                            '• Submit a new registration if desired\n' +
-                            '• Contact an administrator for clarification',
+                        {
+                            name: 'Next Steps', value:
+                                '• Review the feedback provided\n' +
+                                '• Make necessary adjustments\n' +
+                                '• Submit a new registration if desired\n' +
+                                '• Contact an administrator for clarification',
                             inline: false
                         }
                     )
@@ -1039,7 +1035,7 @@ async function handleReject(interaction) {
 // Autocomplete handler for club names
 export async function autocomplete(interaction) {
     const focusedOption = interaction.options.getFocused(true);
-    
+
     if (focusedOption.name === 'club_name') {
         const guildId = interaction.guild.id;
         const search = focusedOption.value.toLowerCase();
