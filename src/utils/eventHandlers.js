@@ -7,7 +7,7 @@ import {
 } from 'discord.js';
 import { db } from '../database.js';
 import { log } from './debug.js';
-import { isServerAdmin, checkClubPermission } from './clubPermissions.js';
+import { isServerModerator, checkClubPermission } from './clubPermissions.js';
 
 /**
  * Handle event approval button (Server Admins only)
@@ -18,7 +18,7 @@ export async function handleEventApproval(interaction) {
     const eventId = parseInt(interaction.customId.split('_')[2]);
 
     // Check permissions - Only server admins can approve events
-    if (!isServerAdmin(interaction.member)) {
+    if (!isServerModerator(interaction.member)) {
         return await interaction.followUp({
             content: '❌ You need Administrator permission to approve events.',
             ephemeral: true

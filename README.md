@@ -118,54 +118,67 @@ This bot offers a wide range of functionalities to manage and enhance Discord se
 
 Follow these steps to get Pulchowk Discord Bot up and running.
 
-### Prerequisites
+```env
+# Discord Bot Token (from Discord Developer Portal -> Bot -> Token)
+BOT_TOKEN="_DISCORD_BOT_TOKEN_HERE"
+# Discord Application (Client) ID (from Discord Developer Portal -> General Information)
+CLIENT_ID="_DISCORD_APPLICATION_CLIENT_ID_HERE"
+# ID of the Guild (Server) where you want to test/deploy commands (right-click server -> Copy ID - Developer Mode must be enabled)
+GUILD_ID="_DISCORD_GUILD_ID_HERE"
+# ID of the role to assign on successful verification (right-click role -> Copy ID)
+VERIFIED_ROLE_ID="_VERIFIED_ROLE_ID_HERE"
 
-  * [Node.js](https://nodejs.org/en/) (v16.x or higher recommended)
-  * [npm](https://www.npmjs.com/) (comes with Node.js)
-  * A [Discord Account](https://discord.com/)
-  * A [Google Cloud Account](https://cloud.google.com/)
+# --- Google Cloud Project Credentials for Gmail API ---
+# GOOGLE_CLIENT_ID (from Google Cloud Console -> APIs & Services -> Credentials -> OAuth 2.0 Client IDs)
+GOOGLE_CLIENT_ID="_GOOGLE_CLIENT_ID_HERE"
+# GOOGLE_CLIENT_SECRET (from Google Cloud Console -> APIs & Services -> Credentials -> OAuth 2.0 Client IDs)
+GOOGLE_CLIENT_SECRET="_GOOGLE_CLIENT_SECRET_HERE"
+# Redirect URI used during OAuth2 consent screen setup (e.g., https://developers.google.com/oauthplayground)
+REDIRECT_URI="https://developers.google.com/oauthplayground" # Or custom redirect URI
+# Refresh Token generated from OAuth2 Playground with https://www.googleapis.com/auth/gmail.send scope
+REFRESH_TOKEN="_GOOGLE_REFRESH_TOKEN_HERE"
+# The email address from college Workspace that will send the OTP emails
+SENDER_EMAIL="college-email@pulchowk.edu.np"
 
-### Installation
+# --- Google Calendar API (for Holidays command) ---
+# Path to Google Service Account Key JSON file (e.g., ./service_account_key.json)
+# If not using service account, leave blank or remove. Holidays command will be disabled.
+GOOGLE_SERVICE_ACCOUNT_KEY_PATH="./service_account_key.json"
+# Google Calendar ID for holidays (e.g., 'en.nepali#holiday@group.v.calendar.google.com' for Nepal holidays)
+GOOGLE_HOLIDAY_CALENDAR_ID="en.nepali#holiday@group.v.calendar.google.com"
 
-1.  **Clone the repository:**
+# Optional: provide service account JSON as base64 (bot will decode to `src/service_account_key.json` on startup)
+GOOGLE_SERVICE_ACCOUNT_KEY_B64=""
 
-    ```bash
-    git clone [https://github.com/fsupulchowk/discord-bot.git](https://github.com/fsupulchowk/discord-bot.git)
-    cd discord-bot
-    ```
+# --- Notice Scraper Configuration ---
+# Channel ID where new notices will be posted
+TARGET_NOTICE_CHANNEL_ID="_NOTICE_CHANNEL_ID_HERE"
+# Channel ID for scraper error notifications (e.g., an admin channel)
+NOTICE_ADMIN_CHANNEL_ID="_NOTICE_ADMIN_CHANNEL_ID_HERE"
+# Interval for checking new notices in milliseconds (e.g., 30 minutes = 1800000)
+NOTICE_CHECK_INTERVAL_MS=1800000
 
-2.  **Install dependencies:**
+# --- Suggestions Feature Configuration ---
+# Channel ID where suggestions will be posted and reacted to
+SUGGESTIONS_CHANNEL_ID="_SUGGESTIONS_CHANNEL_ID_HERE"
 
-    ```bash
-    npm install
-    ```
+# --- Birthday Announcements Configuration ---
+# Channel ID where birthday announcements will be posted
+BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID="_BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID_HERE"
 
-3.  **Create a `.env` file:**
-    Create a file named `.env` in the root directory of project. This file will store sensitive information and configuration.
+# --- Club / Event Automation (optional) ---
+CLUB_AUTO_SYNC_ENABLED="false"
+CLUB_SYNC_INTERVAL_MINUTES=30
+CLUB_AUTO_APPROVE="false"
+EVENT_APPROVAL_CHANNEL_ID=""
+CLUB_EVENT_REMINDER_HOURS=24
+CLUB_JOIN_REQUESTS_PATH="./data/join_requests.xlsx"
+CLUB_REGISTRATIONS_PATH="./data/club_registrations.xlsx"
+CLUB_ATTENDANCE_PATH="./data/attendance.xlsx"
 
-### 1\. Discord Bot Setup
-
-1.  **Create a Discord Application:**
-      - Go to the [Discord Developer Portal](https://discord.com/developers/applications).
-      - Click "New Application". Give it a name (e.g., "Pulchowk Bot").
-2.  **Create a Bot User:**
-      - In application, go to the "Bot" tab.
-      - Click "Add Bot" and confirm.
-      - **Reveal Token:** Click "Reset Token" and copy the token. This is `BOT_TOKEN`. **Keep it secret\!**
-3.  **Enable Gateway Intents:**
-      - Under the "Bot" tab, scroll down to "Privileged Gateway Intents".
-      - Enable **PRESENCE INTENT**, **SERVER MEMBERS INTENT**, and **MESSAGE CONTENT INTENT**. These are crucial for the bot's functionality.
-4.  **Get Client ID:**
-      - Go to the "General Information" tab. Copy the "Application ID". This is `CLIENT_ID`.
-5.  **Get Guild ID (for testing):**
-      - In Discord server, enable "Developer Mode" (User Settings -> Advanced).
-      - Right-click on server icon in Discord and select "Copy ID". This is `GUILD_ID`.
-6.  **Invite the Bot to Server:**
-      - Go to the "OAuth2" -> "URL Generator" tab.
-      - Select `bot` and `applications.commands` scopes.
-      - Under "Bot Permissions", select the following:
-          - `Administrator` (simplest for full functionality, but grant specific permissions for production if you prefer)
-          - Alternatively, grant specific permissions: `Manage Roles`, `Kick Members`, `Ban Members`, `Moderate Members`, `Manage Channels`, `Read Messages/View Channels`, `Send Messages`, `Embed Links`, `Attach Files`, `Add Reactions`, `Use External Emojis`, `Read Message History`, `Connect`, `Speak`, `Mute Members`, `Deafen Members`, `Move Members`.
+# --- Bot Prefix for traditional commands (e.g., !help) ---
+BOT_PREFIX="!"
+```
       - Copy the generated URL and paste it into browser to invite the bot.
 7.  **Create a "Verified" Role:**
       - In Discord server, go to Server Settings -> Roles.
@@ -344,7 +357,70 @@ npm start
 | `/viewantispam` | Views current anti-spam settings (Admin). | `/viewantispam` |
 | `/gotverified` | Displays a list of verified users with their real names and college email addresses (Admin/Moderator).
 
-## Deployment on Render.com
+
+## Club & Event Management
+
+The bot includes a full-featured club and event management system used by Pulchowk campus communities. Below is a concise overview you can use when running or extending the bot.
+
+- **Primary tables**: `clubs`, `club_members`, `club_join_requests`, `club_events`, `event_participants`, `club_announcements`, `club_audit_log`, `club_settings`.
+- **Club registration**: Clubs are created (via commands or import) and may require admin approval depending on `club_settings.require_approval` or the `CLUB_AUTO_APPROVE` environment flag.
+- **Join requests**: Users submit join requests stored in `club_join_requests`. Moderators/presidents approve/reject these which updates `club_members`.
+- **Event creation**: `/createevent <club>` shows a modal for event details. Events are recorded in `club_events` and may require approval. Approval posts to `EVENT_APPROVAL_CHANNEL_ID` (if configured) with approve/reject buttons.
+- **Event lifecycle**: Events can be `pending`, `scheduled`, `ongoing`, `completed`, `cancelled`. Registered participants are tracked in `event_participants` with RSVP/check-in/feedback support.
+- **Automation**: `src/services/clubAutomation.js` schedules reminders, daily/weekly summaries, Excel syncs and inactive-club checks. Configure via env vars (see below).
+
+Environment variables relevant to clubs/events (examples):
+
+- `CLUB_AUTO_SYNC_ENABLED` — `true|false` (automatic Excel sync)
+- `CLUB_SYNC_INTERVAL_MINUTES` — autosync interval
+- `CLUB_AUTO_APPROVE` — `true|false` (auto approve club registrations)
+- `EVENT_APPROVAL_CHANNEL_ID` — channel ID where event approval requests will be posted
+- `CLUB_EVENT_REMINDER_HOURS` — hours before event to send reminders
+
+For deeper behavior and hooks, see:
+
+- `src/commands/slash/createEvent.js` — event creation, modal handling, approvals
+- `src/services/clubAutomation.js` — scheduled jobs, reminders, reports
+- `src/database.js` — club and event schema + migration helpers
+
+## Google Service Account (two options)
+
+The bot can access Google Calendar using a service account JSON file or by accepting a base64-encoded JSON in an environment variable. This is useful in CI/CD or when secret files are not convenient.
+
+- File approach (existing): set `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` to the JSON file path (commonly `./service_account_key.json`).
+- Base64 env approach (supported by `src/bot.js`): set `GOOGLE_SERVICE_ACCOUNT_KEY_B64` to the base64-encoded contents of the service account JSON. The bot will decode and write `src/service_account_key.json` at startup.
+
+Example to create base64 string locally (Unix/macOS):
+
+```bash
+base64 -w0 service_account_key.json > sa_key.b64
+# copy the content of sa_key.b64 into env var GOOGLE_SERVICE_ACCOUNT_KEY_B64
+```
+
+Security note: Do NOT commit service account JSON or the base64 string to version control. Use secret management in your deployment platform.
+
+## Developer Reference (quick map)
+
+- `src/bot.js` — Main bot class. Initializes client, commands, events, schedules, and integrations.
+- `src/database.js` — SQLite initialization and migration logic (creates all tables used by the bot).
+- `src/commands/slash/` — Slash commands (one file per command). Examples: `createEvent.js`, `setupFSU.js`, `verify.js`.
+- `src/services/` — Background services (email, RSS, scraper, club automation).
+- `src/utils/` — Utility modules (logging, permission checks, OTP generator, notice processor).
+
+## Operations checklist
+
+- Back up `bot.db` regularly. The file is created at the repository root as `bot.db` by default.
+- If using Docker or Render, ensure persistent storage for `bot.db` (bind mount or persistent disk).
+- Store `service_account_key.json` and other credentials as secrets in your deployment platform, or provide `GOOGLE_SERVICE_ACCOUNT_KEY_B64` as a protected env var.
+- To redeploy commands after changing a command file, run:
+
+```bash
+node deploy-commands.js --guild   # for testing in a guild
+node deploy-commands.js --global  # for global deployment
+```
+
+For details on Render and Docker deployment, see the sections below.
+
 
 This section provides detailed instructions for deploying bot on Render.com.
 
