@@ -280,7 +280,7 @@ async function handleInfo(interaction) {
             );
 
         if (club.advisor_name) {
-            embed.addFields({ name: '🎓 Faculty Advisor', value: club.advisor_name, inline: true });
+            embed.addFields({ name: '🎓 Club Advisor', value: club.advisor_name, inline: true });
         }
 
         if (club.meeting_day && club.meeting_time) {
@@ -696,7 +696,7 @@ async function handleApprove(interaction) {
                     );
 
                 if (club.advisor_name) {
-                    channelWelcome.addFields({ name: '🎓 Faculty Advisor', value: club.advisor_name, inline: true });
+                    channelWelcome.addFields({ name: '🎓 Club Advisor', value: club.advisor_name, inline: true });
                 }
 
                 if (club.meeting_day && club.meeting_time) {
