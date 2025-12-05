@@ -32,11 +32,9 @@ import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
-import { pollFeeds } from './services/rssService.js';
 import { exit, cwd } from 'process';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { debugConfig } from './utils/debug.js';
@@ -268,7 +266,7 @@ class PulchowkBot {
 
         this.client.once(Events.ClientReady, async c => {
             this.debugConfig.log(`Bot is ready! Logged in as ${c.user.tag}`, 'client', { userId: c.user.id });
-            c.user.setActivity('for new RSS feeds', { type: 'WATCHING' });
+            c.user.setActivity('Managing FSU Pulchowk clubs', { type: 'WATCHING' });
 
             try {
                 this.noticeProcessor = new NoticeProcessor(this.client, this.debugConfig, this.colors);
@@ -283,8 +281,14 @@ class PulchowkBot {
             }
         });
         // this.client.on(Events.InteractionCreate, this._safeEventHandler('InteractionCreate', this._onInteractionCreate.bind(this)));
-        const interactionHandler = await import('./events/interactionCreate.js');
-        this.client.on(Events.InteractionCreate, (...args) => interactionHandler.execute(...args));
+        const { handleInteraction } = await import('./events/interactionCreate.js');
+        this.client.on(Events.InteractionCreate, async (interaction) => {
+            try {
+                await handleInteraction(interaction);
+            } catch (error) {
+                this.debugConfig.log('Error in interaction handler', 'event', null, error, 'error');
+            }
+        });
         this.debugConfig.log('✓ Loaded interaction handler', 'event', null, null, 'success');
         this.client.on(Events.VoiceStateUpdate, this._safeEventHandler('VoiceStateUpdate', this._onVoiceStateUpdate.bind(this)));
         this.client.on(Events.MessageCreate, this._safeEventHandler('MessageCreate', this._onMessageCreate.bind(this)));
@@ -315,12 +319,13 @@ class PulchowkBot {
     }
 
     /**
-     * Registers slash commands with Discord API with retry logic
+     * Registers slash commands with Discord API
      * @private
      */
     async _registerSlashCommands() {
         const token = this.token;
         const clientId = process.env.CLIENT_ID;
+        const guildId = process.env.GUILD_ID;
 
         if (!token || !clientId) {
             const error = new Error('BOT_TOKEN or CLIENT_ID missing from environment variables');
@@ -335,10 +340,43 @@ class PulchowkBot {
 
         const rest = new REST({ version: '10', timeout: 60000 }).setToken(token);
 
+        if (guildId && guildId !== 'YOUR_GUILD_ID_HERE') {
+            this.debugConfig.log(
+                `🚀 DEV MODE: Registering ${this.commandFiles.length} commands to guild ${guildId}...`,
+                'command',
+                { count: this.commandFiles.length, guildId }
+            );
+
+            try {
+                const data = await rest.put(
+                    Routes.applicationGuildCommands(clientId, guildId),
+                    { body: this.commandFiles }
+                );
+
+                this.debugConfig.log(
+                    `✅ Successfully registered ${data.length} guild commands (instant update!)`,
+                    'command',
+                    { registered: data.map(c => c.name) },
+                    null,
+                    'success'
+                );
+
+                console.log(`\n🎉 ${data.length} commands registered to guild ${guildId}`);
+                console.log('✨ Commands are available IMMEDIATELY in your server!');
+                console.log('💡 To register globally, remove DEV_GUILD_ID from .env\n');
+
+                return;
+
+            } catch (error) {
+                this.debugConfig.log('Failed to register guild commands', 'command', null, error, 'error');
+                throw error;
+            }
+        }
+
         this.debugConfig.log(
-            `Registering ${this.commandFiles.length} commands with Discord...`,
+            `🌍 Registering ${this.commandFiles.length} commands globally (this may take several minutes)...`,
             'command',
-            { count: this.commandFiles.length, commands: this.commandFiles.map(c => c.name) }
+            { count: this.commandFiles.length }
         );
 
         const maxRetries = 3;
@@ -347,19 +385,59 @@ class PulchowkBot {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 this.debugConfig.log(`Registration attempt ${attempt}/${maxRetries}`, 'command');
+                const BATCH_SIZE = 25;
+                const batches = [];
 
-                const data = await rest.put(
-                    Routes.applicationCommands(clientId),
-                    { body: this.commandFiles }
-                );
+                for (let i = 0; i < this.commandFiles.length; i += BATCH_SIZE) {
+                    batches.push(this.commandFiles.slice(i, i + BATCH_SIZE));
+                }
+
+                if (batches.length > 1) {
+                    this.debugConfig.log(
+                        `Splitting ${this.commandFiles.length} commands into ${batches.length} batches`,
+                        'command'
+                    );
+                }
+
+                let allRegistered = [];
+
+                for (let i = 0; i < batches.length; i++) {
+                    const batch = batches[i];
+                    this.debugConfig.log(`Registering batch ${i + 1}/${batches.length} (${batch.length} commands)`, 'command');
+
+                    try {
+                        const data = await rest.put(
+                            Routes.applicationCommands(clientId),
+                            { body: batch }
+                        );
+
+                        allRegistered = allRegistered.concat(data);
+                        this.debugConfig.log(`✓ Batch ${i + 1} registered (${data.length} commands)`, 'command');
+
+                        // Wait between batches to avoid rate limits
+                        if (i < batches.length - 1) {
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                        }
+
+                    } catch (batchError) {
+                        this.debugConfig.log(`Error in batch ${i + 1}`, 'command', null, batchError, 'error');
+                        throw batchError;
+                    }
+                }
 
                 this.debugConfig.log(
-                    `✅ Successfully registered ${data.length} application commands globally`,
+                    `✅ Successfully registered ${allRegistered.length} application commands globally`,
                     'command',
-                    { registered: data.map(c => c.name) },
+                    { registered: allRegistered.map(c => c.name) },
                     null,
                     'success'
                 );
+
+                console.log(`\n🎉 ${allRegistered.length} commands registered globally`);
+                console.log('⏰ Note: Global commands take up to 1 hour to propagate to all servers');
+                console.log('💡 For instant updates during development, set DEV_GUILD_ID in .env\n');
+
+                await new Promise(resolve => setTimeout(resolve, 3000));
 
                 const registeredCommands = await rest.get(Routes.applicationCommands(clientId));
                 this.debugConfig.log(
@@ -372,10 +450,18 @@ class PulchowkBot {
 
             } catch (error) {
                 lastError = error;
+
                 this.debugConfig.log(
                     `Registration attempt ${attempt} failed`,
                     'command',
-                    { attempt, maxRetries },
+                    {
+                        attempt,
+                        maxRetries,
+                        errorCode: error.code,
+                        errorMessage: error.message,
+                        errorName: error.name,
+                        statusCode: error.status
+                    },
                     error,
                     'error'
                 );
@@ -384,10 +470,7 @@ class PulchowkBot {
                     this.debugConfig.log(
                         'Invalid command structure detected',
                         'command',
-                        {
-                            error: error.message,
-                            rawError: error.rawError
-                        },
+                        { error: error.message, rawError: error.rawError },
                         error,
                         'error'
                     );
@@ -402,16 +485,28 @@ class PulchowkBot {
                 if (error.code === 401) {
                     throw new Error('Invalid BOT_TOKEN - authentication failed');
                 }
+
+                if (error.code === 429 || error.status === 429) {
+                    const retryAfter = error.retry_after || error.retryAfter || 5000;
+                    this.debugConfig.log(`Rate limited. Waiting ${retryAfter}ms...`, 'command', null, null, 'warn');
+                    await new Promise(resolve => setTimeout(resolve, retryAfter));
+                    continue;
+                }
+
+                if (error.name === 'AbortError' || error.message?.includes('timeout')) {
+                    this.debugConfig.log('Request timed out', 'command', null, null, 'warn');
+                }
+
                 if (attempt < maxRetries) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+                    const delay = Math.min(5000 * attempt, 15000);
                     this.debugConfig.log(`Waiting ${delay}ms before retry...`, 'command');
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
             }
         }
-        throw new Error(`Failed to register commands after ${maxRetries} attempts: ${lastError.message}`);
-    }
 
+        throw new Error(`Failed to register commands after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+    }
     /**
     * helper method to force refresh commands (useful for debugging)
     * @private
@@ -1661,21 +1756,6 @@ class PulchowkBot {
             });
             this.debugConfig.log('Scheduled daily birthday announcements for 12 AM.', 'scheduler');
 
-            // RSS polling
-            const RSS_POLL_INTERVAL_MINUTES = parseInt(process.env.RSS_POLL_INTERVAL_MINUTES || '5');
-            if (RSS_POLL_INTERVAL_MINUTES > 0) {
-                schedule.scheduleJob(`*/${RSS_POLL_INTERVAL_MINUTES} * * * *`, async () => {
-                    this.debugConfig.log('Running RSS feed poll...', 'scheduler');
-                    try {
-                        await pollFeeds(this.client);
-                    } catch (error) {
-                        this.debugConfig.log('Error in RSS polling job', 'scheduler', null, error, 'error');
-                    }
-                });
-                this.debugConfig.log(`Scheduled RSS feed polling every ${RSS_POLL_INTERVAL_MINUTES} minutes.`, 'scheduler');
-            } else {
-                this.debugConfig.log('RSS polling disabled.', 'scheduler', null, null, 'warn');
-            }
 
             // Notice checking
             const NOTICE_CHECK_INTERVAL_MS = parseInt(process.env.NOTICE_CHECK_INTERVAL_MS || '1800000');

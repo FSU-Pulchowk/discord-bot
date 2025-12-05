@@ -16,7 +16,7 @@ class ClubAutomation {
         this.client = client;
         this.excelService = new ClubExcelService(client);
         this.scheduledJobs = [];
-        
+
         // Configuration from environment
         this.config = {
             autoSyncEnabled: process.env.CLUB_AUTO_SYNC_ENABLED === 'true',
@@ -97,10 +97,10 @@ class ClubAutomation {
                 }
 
                 const result = await this.excelService.syncFromExcel(task.type, task.path);
-                
+
                 if (result.success && result.processed > 0) {
                     log(`Auto-sync successful for ${task.type}: ${result.processed} processed`, 'club');
-                    
+
                     // Notify admins if there were any issues
                     if (result.errors && result.errors.length > 0) {
                         await this.notifyAdmins(`⚠️ Auto-sync for ${task.type} completed with ${result.errors.length} errors`);
@@ -129,7 +129,7 @@ class ClubAutomation {
                      FROM club_events e
                      JOIN clubs c ON e.club_id = c.id
                      WHERE e.status = 'scheduled' 
-                     AND datetime(e.date || ' ' || COALESCE(e.start_time, '00:00')) 
+                     AND datetime(e.event_date || ' ' || COALESCE(e.start_time, '00:00')) 
                          BETWEEN datetime('now') AND datetime(?, 'unixepoch')`,
                     [Math.floor(reminderTime.getTime() / 1000)],
                     (err, rows) => {
@@ -171,7 +171,7 @@ class ClubAutomation {
                 .setTitle(`⏰ Event Reminder: ${event.title}`)
                 .setDescription(`This event is coming up in ${this.config.eventReminderHours} hours!`)
                 .addFields(
-                    { name: '📅 Date & Time', value: `${event.date} at ${event.start_time || 'TBA'}`, inline: true },
+                    { name: '📅 Date & Time', value: `${event.event_date} at ${event.start_time || 'TBA'}`, inline: true },
                     { name: '📍 Location', value: event.location || 'TBA', inline: true },
                     { name: '🏛️ Club', value: event.club_name, inline: true }
                 );
@@ -227,7 +227,7 @@ class ClubAutomation {
 
         try {
             const stats = await this.getDailyStats();
-            
+
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
                 .setTitle('📊 Daily Club Summary')
@@ -254,7 +254,7 @@ class ClubAutomation {
      */
     async getDailyStats() {
         const yesterday = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
-        
+
         const newMembers = await new Promise((resolve, reject) => {
             db.get(
                 `SELECT COUNT(*) as count FROM club_members WHERE joined_at >= ?`,
@@ -292,7 +292,7 @@ class ClubAutomation {
         const upcomingEvents = await new Promise((resolve, reject) => {
             db.get(
                 `SELECT COUNT(*) as count FROM club_events 
-                 WHERE status = 'scheduled' AND date BETWEEN date('now') AND date('now', '+7 days')`,
+                 WHERE status = 'scheduled' AND event_date BETWEEN date('now') AND date('now', '+7 days')`,
                 [],
                 (err, row) => {
                     if (err) reject(err);
@@ -304,7 +304,7 @@ class ClubAutomation {
         const eventsToday = await new Promise((resolve, reject) => {
             db.get(
                 `SELECT COUNT(*) as count FROM club_events 
-                 WHERE status = 'scheduled' AND date = date('now')`,
+                 WHERE status = 'scheduled' AND event_date = date('now')`,
                 [],
                 (err, row) => {
                     if (err) reject(err);
@@ -401,9 +401,9 @@ class ClubAutomation {
 
             const upcomingEvents = await new Promise((resolve, reject) => {
                 db.all(
-                    `SELECT title, date, start_time FROM club_events 
-                     WHERE club_id = ? AND date >= date('now') AND status = 'scheduled'
-                     ORDER BY date LIMIT 5`,
+                    `SELECT title, event_date, start_time FROM club_events 
+                     WHERE club_id = ? AND event_date >= date('now') AND status = 'scheduled'
+                     ORDER BY event_date LIMIT 5`,
                     [club.id],
                     (err, rows) => {
                         if (err) reject(err);
@@ -423,7 +423,7 @@ class ClubAutomation {
                 );
 
             if (upcomingEvents.length > 0) {
-                const eventList = upcomingEvents.map(e => `• ${e.title} - ${e.date}`).join('\n');
+                const eventList = upcomingEvents.map(e => `• ${e.title} - ${e.event_date}`).join('\n');
                 embed.addFields({ name: '📆 Next Events', value: eventList });
             }
 
@@ -585,12 +585,12 @@ class ClubAutomation {
      */
     shutdown() {
         log('Shutting down club automation', 'club');
-        
+
         this.scheduledJobs.forEach(({ name, job }) => {
             job.cancel();
             log(`Cancelled job: ${name}`, 'club');
         });
-        
+
         this.scheduledJobs = [];
     }
 }

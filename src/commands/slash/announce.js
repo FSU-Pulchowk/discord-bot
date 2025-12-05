@@ -1,5 +1,5 @@
 // src/commands/slash/announce.js
-import { 
+import {
     SlashCommandBuilder,
     ModalBuilder,
     TextInputBuilder,
@@ -15,6 +15,7 @@ import {
 import { db, getClubByIdentifier } from '../../database.js';
 import { log } from '../../utils/debug.js';
 import { checkClubPermission } from '../../utils/clubPermissions.js';
+
 
 const PUBLIC_WEBHOOK_URL = process.env.WEBHOOK_URL_1;
 
@@ -90,7 +91,7 @@ export async function execute(interaction) {
         await interaction.reply({
             content: '❌ An error occurred. Please try again.',
             flags: MessageFlags.Ephemeral
-        }).catch(() => {});
+        }).catch(() => { });
     }
 }
 
@@ -295,8 +296,8 @@ export async function handleEmbedAnnouncementModal(interaction) {
             .setColor(color)
             .setTitle(title)
             .setDescription(description)
-            .setFooter({ 
-                text: `Posted by ${interaction.user.tag} (${permissionCheck.level})`,
+            .setFooter({
+                text: `Posted by ${interaction.user.tag} (${permissionCheck.level}) • ${club.name}`,
                 iconURL: interaction.user.displayAvatarURL()
             })
             .setTimestamp();
@@ -331,7 +332,7 @@ async function postToClubChannel(interaction, club, message, embed, mention, per
 
     try {
         const clubChannel = await interaction.guild.channels.fetch(club.channel_id);
-        
+
         if (!clubChannel) {
             return await interaction.editReply({
                 content: '❌ Club channel not found.'
@@ -362,8 +363,10 @@ async function postToClubChannel(interaction, club, message, embed, mention, per
                 embeds: [embed]
             });
         } else {
+            // Add footer to simple messages
+            const footerText = `\n\n*— Posted by ${interaction.user.tag} (${permissionLevel}) for ${club.name}*`;
             postedMessage = await clubChannel.send({
-                content: `${messageContent ? messageContent + '\n\n' : ''}${message}`
+                content: `${messageContent ? messageContent + '\n\n' : ''}${message}${footerText}`
             });
         }
 
@@ -375,7 +378,7 @@ async function postToClubChannel(interaction, club, message, embed, mention, per
                     channel_id, posted_by, announcement_type
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'club')`,
                 [
-                    club.id, interaction.guild.id, 
+                    club.id, interaction.guild.id,
                     embed ? embed.data.title : 'Simple Announcement',
                     message || embed?.data.description,
                     postedMessage.id, clubChannel.id, interaction.user.id
@@ -415,7 +418,8 @@ async function postToClubChannel(interaction, club, message, embed, mention, per
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '📢 Channel', value: `<#${clubChannel.id}>`, inline: true },
                 { name: '💬 Format', value: embed ? 'Embed' : 'Simple', inline: true },
-                { name: '👤 Posted as', value: permissionLevel, inline: true }
+                { name: '👤 Posted by', value: interaction.user.tag, inline: true },
+                { name: '🎭 Role', value: permissionLevel, inline: true }
             )
             .setTimestamp();
 
@@ -436,18 +440,24 @@ async function postToPublicWebhook(interaction, club, message, embed, mention) {
 
         let content = message || null;
         if (mention) {
-            const mentionText = mention.toLowerCase() === 'everyone' ? '@everyone' : 
-                               mention.toLowerCase() === 'here' ? '@here' : null;
+            const mentionText = mention.toLowerCase() === 'everyone' ? '@everyone' :
+                mention.toLowerCase() === 'here' ? '@here' : null;
             if (mentionText) {
                 content = `${mentionText}\n\n${content || ''}`;
             }
         }
 
         if (embed) {
-            // Add club branding
+            // Add club branding and update footer for public announcements
             embed.setAuthor({
                 name: `${club.name} - Public Announcement`,
                 iconURL: club.logo_url || interaction.guild.iconURL()
+            });
+            // Update footer to show it's from the club
+            const currentFooter = embed.data.footer?.text || '';
+            embed.setFooter({
+                text: currentFooter,
+                iconURL: embed.data.footer?.icon_url
             });
         }
 
@@ -507,8 +517,8 @@ async function postToPublicWebhook(interaction, club, message, embed, mention) {
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '🌐 Type', value: 'Public Webhook', inline: true },
                 { name: '💬 Format', value: embed ? 'Embed' : 'Simple', inline: true },
-                { name: '📛 Posted as', value: club.name, inline: true },
-                { name: '🖼️ Avatar', value: club.logo_url ? 'Club Logo' : 'Server Icon', inline: true }
+                { name: '� Posted by', value: interaction.user.tag, inline: true },
+                { name: '� Appears as', value: club.name, inline: true }
             )
             .setTimestamp();
 
@@ -545,7 +555,7 @@ export async function autocomplete(interaction) {
         for (const club of clubs) {
             if (club.name.toLowerCase().includes(focusedValue.toLowerCase()) ||
                 club.slug.toLowerCase().includes(focusedValue.toLowerCase())) {
-                
+
                 const permCheck = await checkClubPermission({
                     member: interaction.member,
                     clubId: club.id,

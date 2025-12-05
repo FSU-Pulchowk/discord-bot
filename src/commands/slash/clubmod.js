@@ -94,11 +94,56 @@ export async function execute(interaction) {
 
         // Get club roles
         const clubRole = club.role_id ? await interaction.guild.roles.fetch(club.role_id).catch(() => null) : null;
-        const modRole = club.moderator_role_id ? await interaction.guild.roles.fetch(club.moderator_role_id).catch(() => null) : null;
+        let modRole = club.moderator_role_id ? await interaction.guild.roles.fetch(club.moderator_role_id).catch(() => null) : null;
 
-        if (!clubRole || !modRole) {
+        // ✅ FIX: Create moderator role if it doesn't exist
+        if (!modRole && clubRole) {
+            log('Moderator role missing, creating it now', 'club', { clubId: club.id, clubName: club.name });
+            
+            try {
+                modRole = await interaction.guild.roles.create({
+                    name: `${club.name} - Moderator`,
+                    color: clubRole.color, // Same color as club role
+                    hoist: true, // Display separately in sidebar
+                    mentionable: true,
+                    reason: `Creating missing moderator role for ${club.name}`
+                });
+
+                // Update database with new moderator role
+                await new Promise((resolve, reject) => {
+                    db.run(
+                        `UPDATE clubs SET moderator_role_id = ?, updated_at = ? WHERE id = ?`,
+                        [modRole.id, Date.now(), club.id],
+                        (err) => {
+                            if (err) reject(err);
+                            else resolve();
+                        }
+                    );
+                });
+
+                log('Created moderator role successfully', 'club', { 
+                    clubId: club.id, 
+                    clubName: club.name, 
+                    modRoleId: modRole.id 
+                });
+
+            } catch (createError) {
+                log('Failed to create moderator role', 'club', { clubId: club.id }, createError, 'error');
+                return await interaction.editReply({
+                    content: '❌ Failed to create moderator role. Please contact an administrator.'
+                });
+            }
+        }
+
+        if (!clubRole) {
             return await interaction.editReply({
-                content: '❌ Club roles not found. Please contact an administrator to fix club configuration.'
+                content: '❌ Club role not found. Please contact an administrator to fix club configuration.'
+            });
+        }
+
+        if (!modRole) {
+            return await interaction.editReply({
+                content: '❌ Failed to create/find moderator role. Please contact an administrator.'
             });
         }
 
@@ -190,7 +235,7 @@ async function handleAddModerator(interaction, club, clubRole, modRole) {
         .setTitle('✅ Moderator Added')
         .setDescription(`${targetUser} has been promoted to moderator of **${club.name}**`)
         .addFields(
-            { name: '🏛️ Club', value: club.name, inline: true },
+            { name: '🛏️ Club', value: club.name, inline: true },
             { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
             { name: '👤 New Moderator', value: `${targetUser.tag}`, inline: true },
             { name: '🛡️ New Permissions', value: 
@@ -215,7 +260,7 @@ async function handleAddModerator(interaction, club, clubRole, modRole) {
             .setTitle(`🎉 You've been promoted to Moderator!`)
             .setDescription(`You are now a moderator of **${club.name}** in ${interaction.guild.name}`)
             .addFields(
-                { name: '🏛️ Club', value: club.name, inline: true },
+                { name: '🛏️ Club', value: club.name, inline: true },
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '👑 Promoted By', value: `${interaction.user.tag}`, inline: true },
                 { name: '🛡️ Your New Permissions', value: 
@@ -307,7 +352,7 @@ async function handleRemoveModerator(interaction, club, clubRole, modRole) {
         .setTitle('✅ Moderator Removed')
         .setDescription(`${targetUser} has been removed as moderator of **${club.name}**`)
         .addFields(
-            { name: '🏛️ Club', value: club.name, inline: true },
+            { name: '🛏️ Club', value: club.name, inline: true },
             { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
             { name: '📊 Status', value: 'They remain a club member with standard permissions', inline: false }
         )
@@ -322,7 +367,7 @@ async function handleRemoveModerator(interaction, club, clubRole, modRole) {
             .setTitle('🔔 Moderator Status Removed')
             .setDescription(`Your moderator status for **${club.name}** has been removed.`)
             .addFields(
-                { name: '🏛️ Club', value: club.name, inline: true },
+                { name: '🛏️ Club', value: club.name, inline: true },
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '📋 Note', value: 'You are still a member of the club with regular member permissions.', inline: false }
             )
@@ -383,7 +428,7 @@ async function handleListModerators(interaction, club, modRole) {
             .setTitle(`${club.name} - Moderators`)
             .setDescription(modList.join('\n') || 'No moderators')
             .addFields(
-                { name: '🏛️ Club', value: club.name, inline: true },
+                { name: '🛏️ Club', value: club.name, inline: true },
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '📊 Total', value: `${moderators.length} (including president)`, inline: true },
                 { name: '🛡️ Moderator Role', value: `<@&${modRole.id}>`, inline: true }
@@ -409,11 +454,18 @@ async function handleListModerators(interaction, club, modRole) {
  * Autocomplete handler for club names (only clubs user is president of)
  */
 export async function autocomplete(interaction) {
-    const focusedValue = interaction.options.getFocused();
+    const focusedOption = interaction.options.getFocused(true);
+    const focusedValue = focusedOption.value.toLowerCase();
     const guildId = interaction.guild.id;
     const userId = interaction.user.id;
 
     try {
+        // Only handle 'club' option autocomplete
+        if (focusedOption.name !== 'club') {
+            await interaction.respond([]);
+            return;
+        }
+
         // Only show clubs where user is president
         const clubs = await new Promise((resolve, reject) => {
             db.all(
@@ -429,21 +481,68 @@ export async function autocomplete(interaction) {
             );
         });
 
-        // Filter based on input
-        const filtered = clubs
-            .filter(club => 
-                club.name.toLowerCase().includes(focusedValue.toLowerCase()) ||
-                club.slug.toLowerCase().includes(focusedValue.toLowerCase())
-            )
-            .slice(0, 25)
-            .map(club => ({
-                name: `${club.name} (${club.slug})`,
-                value: club.slug
-            }));
+        // If no clubs found at all
+        if (!clubs || clubs.length === 0) {
+            await interaction.respond([
+                {
+                    name: '❌ No clubs found where you are president',
+                    value: 'no_clubs_found'
+                }
+            ]);
+            return;
+        }
 
-        await interaction.respond(filtered);
+        // Filter clubs based on search input
+        let filtered;
+        
+        if (!focusedValue || focusedValue.trim() === '') {
+            // If empty search, show first 25 clubs
+            filtered = clubs.slice(0, 25);
+        } else {
+            // Filter by name or slug
+            filtered = clubs.filter(club => {
+                const nameMatch = club.name.toLowerCase().includes(focusedValue);
+                const slugMatch = club.slug.toLowerCase().includes(focusedValue);
+                return nameMatch || slugMatch;
+            });
+        }
+
+        // Take only first 25 results (Discord limit)
+        const results = filtered.slice(0, 25).map(club => ({
+            name: `${club.name} (${club.slug})`.substring(0, 100), // Discord max is 100 chars
+            value: club.slug
+        }));
+
+        // If no matches found after filtering
+        if (results.length === 0) {
+            await interaction.respond([
+                {
+                    name: `❌ No clubs matching "${focusedValue}"`,
+                    value: 'no_match'
+                }
+            ]);
+            return;
+        }
+
+        await interaction.respond(results);
+
     } catch (error) {
-        log('Error in clubmod autocomplete', 'club', null, error, 'error');
-        await interaction.respond([]);
+        log('Error in clubmod autocomplete', 'club', { 
+            userId, 
+            guildId, 
+            focusedValue: focusedOption?.value 
+        }, error, 'error');
+        
+        // Always respond, even on error
+        try {
+            await interaction.respond([
+                {
+                    name: '❌ Error loading clubs - please try again',
+                    value: 'error'
+                }
+            ]);
+        } catch (respondError) {
+            log('Failed to respond to autocomplete after error', 'club', null, respondError, 'error');
+        }
     }
 }

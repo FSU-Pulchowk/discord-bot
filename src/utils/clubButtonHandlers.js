@@ -16,10 +16,27 @@ import { checkClubPermission } from './clubPermissions.js';
  * Handle "Join Club" button clicks
  */
 export async function handleJoinClubButton(interaction) {
-    const clubId = parseInt(interaction.customId.split('_')[2]);
+    const clubIdStr = interaction.customId.split('_')[2];
+    const clubId = parseInt(clubIdStr);
+    
+    if (isNaN(clubId)) {
+        log('Invalid club ID in join button', 'club', { customId: interaction.customId }, null, 'error');
+        return await interaction.reply({
+            content: '❌ Invalid club identifier. Please try again or contact an administrator.',
+            ephemeral: true
+        }).catch(() => {});
+    }
+
     const PULCHOWKIAN_ROLE_ID = process.env.VERIFIED_ROLE_ID || 'YOUR_VERIFIED_ROLE_ID';
 
     try {
+        if (!interaction.guild) {
+            return await interaction.reply({
+                content: '❌ This command can only be used in a server.',
+                ephemeral: true
+            });
+        }
+
         // Check if user has @Pulchowkian role
         if (!interaction.member.roles.cache.has(PULCHOWKIAN_ROLE_ID)) {
             return await interaction.reply({
@@ -28,26 +45,33 @@ export async function handleJoinClubButton(interaction) {
             });
         }
 
-        // Get club details
-        const club = await new Promise((resolve, reject) => {
-            db.get(
-                `SELECT * FROM clubs WHERE id = ? AND status = 'active'`,
-                [clubId],
-                (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                }
-            );
-        });
-
-        if (!club) {
+        let club;
+        try {
+            club = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT * FROM clubs WHERE id = ? AND status = 'active'`,
+                    [clubId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+        } catch (dbError) {
+            log('Database error fetching club', 'club', { clubId }, dbError, 'error');
             return await interaction.reply({
-                content: '❌ This club is not currently active.',
+                content: '❌ Database error. Please try again later.',
                 ephemeral: true
             });
         }
 
-        // Check if already a member
+        if (!club) {
+            return await interaction.reply({
+                content: '❌ This club is not currently active or does not exist.',
+                ephemeral: true
+            });
+        }
+
         const existingMember = await new Promise((resolve, reject) => {
             db.get(
                 `SELECT id FROM club_members WHERE club_id = ? AND user_id = ? AND status = 'active'`,
@@ -66,7 +90,6 @@ export async function handleJoinClubButton(interaction) {
             });
         }
 
-        // Check for pending request
         const pendingRequest = await new Promise((resolve, reject) => {
             db.get(
                 `SELECT id FROM club_join_requests WHERE club_id = ? AND user_id = ? AND status = 'pending'`,
@@ -87,7 +110,7 @@ export async function handleJoinClubButton(interaction) {
 
         // Check if club requires approval
         if (club.require_approval) {
-            // Show join request modal
+            // ✅ FIX 4: Modal doesn't need defer - just show it
             const modal = new ModalBuilder()
                 .setCustomId(`join_club_modal_${clubId}`)
                 .setTitle(`Join ${club.name}`);
@@ -131,11 +154,15 @@ export async function handleJoinClubButton(interaction) {
         }
 
     } catch (error) {
-        log('Error handling join club button:', 'club', null, error, 'error');
-        await interaction.reply({
-            content: '❌ An error occurred. Please try again later.',
-            ephemeral: true
-        }).catch(() => {});
+        log('Error handling join club button:', 'club', { clubId }, error, 'error');
+        
+        // ✅ FIX 5: Better error response handling
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content: '❌ An error occurred. Please try again later.',
+                ephemeral: true
+            }).catch(() => {});
+        }
     }
 }
 
@@ -184,7 +211,7 @@ async function autoApproveJoin(interaction, club, clubId) {
                     await interaction.member.roles.add(role, `Joined club: ${club.name}`);
                 }
             } catch (roleError) {
-                log('Failed to assign club role', 'club', null, roleError, 'warn');
+                log('Failed to assign club role', 'club', { roleId: club.role_id }, roleError, 'warn');
             }
         }
 
@@ -239,15 +266,18 @@ async function autoApproveJoin(interaction, club, clubId) {
 
                 await channel.send({ embeds: [welcomeMsg] });
             } catch (channelError) {
-                log('Failed to send welcome message to club channel', 'club', null, channelError, 'warn');
+                log('Failed to send welcome message to club channel', 'club', { channelId: club.channel_id }, channelError, 'warn');
             }
         }
 
     } catch (error) {
-        log('Error in auto-approve join', 'club', null, error, 'error');
-        await interaction.editReply({
-            content: '❌ An error occurred while joining the club.'
-        });
+        log('Error in auto-approve join', 'club', { clubId }, error, 'error');
+        
+        if (interaction.deferred) {
+            await interaction.editReply({
+                content: '❌ An error occurred while joining the club.'
+            }).catch(() => {});
+        }
     }
 }
 
@@ -255,12 +285,44 @@ async function autoApproveJoin(interaction, club, clubId) {
  * Handle join club modal submission
  */
 export async function handleJoinClubModal(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    // ✅ CRITICAL: Defer IMMEDIATELY - modals expire in 3 seconds!
+    try {
+        await interaction.deferReply({ ephemeral: true });
+    } catch (deferError) {
+        // Interaction already expired before we could defer
+        if (deferError.code === 10062 || deferError.message?.includes('Unknown interaction')) {
+            log('Join club modal interaction expired before defer', 'club', { 
+                customId: interaction.customId,
+                userId: interaction.user.id 
+            }, null, 'warn');
+            return;
+        }
+        throw deferError;
+    }
 
-    const clubId = parseInt(interaction.customId.split('_')[3]);
-    const fullName = interaction.fields.getTextInputValue('full_name');
-    const interestConfirmed = interaction.fields.getTextInputValue('interest_confirmed').toUpperCase();
-    const reason = interaction.fields.getTextInputValue('reason');
+    // ✅ FIX 6: Validate clubId from modal customId
+    const clubIdStr = interaction.customId.split('_')[3];
+    const clubId = parseInt(clubIdStr);
+    
+    if (isNaN(clubId)) {
+        return await interaction.editReply({
+            content: '❌ Invalid club identifier.'
+        });
+    }
+
+    // ✅ FIX: Get all modal field values with error handling
+    let fullName, interestConfirmed, reason;
+    
+    try {
+        fullName = interaction.fields.getTextInputValue('full_name');
+        interestConfirmed = interaction.fields.getTextInputValue('interest_confirmed').toUpperCase();
+        reason = interaction.fields.getTextInputValue('reason');
+    } catch (fieldError) {
+        log('Error reading modal fields', 'club', { clubId }, fieldError, 'error');
+        return await interaction.editReply({
+            content: '❌ Error reading form data. Please try again.'
+        });
+    }
 
     try {
         // Validate confirmation
@@ -415,10 +477,10 @@ export async function handleJoinClubModal(interaction) {
         });
 
     } catch (error) {
-        log('Error handling join modal:', 'club', null, error, 'error');
+        log('Error handling join modal:', 'club', { clubId }, error, 'error');
         await interaction.editReply({
             content: '❌ An error occurred while processing your request.'
-        });
+        }).catch(() => {});
     }
 }
 
@@ -429,6 +491,13 @@ export async function handleJoinRequestResponse(interaction, action) {
     await interaction.deferUpdate();
 
     const requestId = parseInt(interaction.customId.split('_')[2]);
+
+    if (isNaN(requestId)) {
+        return await interaction.followUp({
+            content: '❌ Invalid request ID.',
+            ephemeral: true
+        });
+    }
 
     try {
         // Get request details
@@ -460,9 +529,13 @@ export async function handleJoinRequestResponse(interaction, action) {
             });
         }
 
+        // ✅ FIX 7: Fetch guild if interaction is in DM
+        const guild = interaction.guild || await interaction.client.guilds.fetch(request.guild_id);
+        const member = guild.members.cache.get(interaction.user.id) || await guild.members.fetch(interaction.user.id);
+
         // Check permission - must be club president or moderator
         const permissionCheck = await checkClubPermission({
-            member: interaction.member,
+            member: member,
             clubId: request.club_id,
             action: 'moderate'
         });
@@ -500,13 +573,12 @@ export async function handleJoinRequestResponse(interaction, action) {
             });
 
             // Assign club role
-            const guild = await interaction.client.guilds.fetch(request.guild_id);
-            const member = await guild.members.fetch(request.user_id);
+            const targetMember = await guild.members.fetch(request.user_id);
             
             if (request.role_id) {
                 const role = await guild.roles.fetch(request.role_id);
                 if (role) {
-                    await member.roles.add(role, `Approved to join ${request.club_name}`);
+                    await targetMember.roles.add(role, `Approved to join ${request.club_name}`);
                 }
             }
 
@@ -620,7 +692,7 @@ export async function handleJoinRequestResponse(interaction, action) {
         }
 
     } catch (error) {
-        log('Error handling join request response:', 'club', null, error, 'error');
+        log('Error handling join request response:', 'club', { requestId }, error, 'error');
         await interaction.followUp({
             content: '❌ An error occurred while processing the request.',
             ephemeral: true

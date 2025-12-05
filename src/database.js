@@ -24,7 +24,7 @@ async function initializeDatabase() {
 
             db.serialize(() => {
                 // ==================== CORE TABLES ====================
-                
+
                 createGuildConfigsTable();
                 createReactionRolesTable();
                 createSuggestionsTable();
@@ -37,16 +37,16 @@ async function initializeDatabase() {
                 createAntiSpamConfigsTable();
                 createFaqsTable();
                 createAdminTasksTable();
-                createRssFeedsTable();
                 createModerationActionsTable();
                 createReputationTable();
                 createModCooldownsTable();
-                
+
                 // ==================== CLUB TABLES ====================
-                
+
                 createClubsTable();
                 createClubMembersTable();
                 createClubJoinRequestsTable();
+                fixClubJoinRequestsSchema();
                 createClubEventsTableWithMigration();
                 createEventParticipantsTable();
                 ensureEventParticipantsColumns();
@@ -54,13 +54,13 @@ async function initializeDatabase() {
                 createClubAuditLogTable();
                 createClubResourcesTable();
                 createClubSettingsTable();
-                
+
                 // ==================== INDEXES & VIEWS ====================
-                
+
                 createClubIndexes();
                 createClubTriggers();
                 createClubViews();
-                
+
                 log('Database initialization complete.', 'init');
                 log('All database tables checked/created and schema updated.', 'init');
                 resolve(db);
@@ -285,24 +285,7 @@ function createAdminTasksTable() {
     ]);
 }
 
-function createRssFeedsTable() {
-    db.run(`CREATE TABLE IF NOT EXISTS rss_feeds (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id TEXT NOT NULL,
-        channel_id TEXT NOT NULL,
-        url TEXT NOT NULL,
-        last_guid TEXT,
-        title TEXT,
-        UNIQUE(guild_id, channel_id, url)
-    )`, (err) => {
-        if (err) log('Error creating rss_feeds:', 'error', null, err, 'error');
-        else log('✓ rss_feeds', 'init');
-    });
 
-    migrateTable('rss_feeds', [
-        { name: "title", type: "TEXT", defaultValue: "NULL" }
-    ]);
-}
 
 function createModerationActionsTable() {
     db.run(`CREATE TABLE IF NOT EXISTS moderation_actions (
@@ -392,6 +375,8 @@ function createClubsTable() {
         { name: "social_media", type: "TEXT", defaultValue: "NULL" },
         { name: "require_approval", type: "BOOLEAN", defaultValue: 1 },
         { name: "is_public", type: "BOOLEAN", defaultValue: 1 },
+        { name: "created_at", type: "INTEGER", defaultValue: "(strftime('%s', 'now'))" },
+        { name: "updated_at", type: "INTEGER", defaultValue: "(strftime('%s', 'now'))" },
         { name: "approved_at", type: "INTEGER", defaultValue: "NULL" },
         { name: "approved_by", type: "TEXT", defaultValue: "NULL" }
     ]);
@@ -440,6 +425,7 @@ function createClubMembersTable() {
 
     migrateTable('club_members', [
         { name: "last_active_at", type: "INTEGER", defaultValue: "NULL" },
+        { name: "updated_at", type: "INTEGER", defaultValue: "(strftime('%s', 'now'))" },
         { name: "removed_at", type: "INTEGER", defaultValue: "NULL" },
         { name: "removed_by", type: "TEXT", defaultValue: "NULL" },
         { name: "removal_reason", type: "TEXT", defaultValue: "NULL" }
@@ -479,13 +465,167 @@ function createClubJoinRequestsTable() {
     ]);
 }
 
+/**
+ * Fix and validate club_join_requests schema
+ * Removes legacy columns and ensures all required columns exist
+ */
+function fixClubJoinRequestsSchema() {
+    db.all("PRAGMA table_info(club_join_requests)", (err, columns) => {
+        if (err) {
+            log('Error checking club_join_requests schema:', 'error', null, err, 'error');
+            return;
+        }
+
+        const columnNames = columns ? columns.map(col => col.name) : [];
+
+        const legacyColumns = ['interest_confirmed', 'reason'];
+        const foundLegacy = legacyColumns.filter(col => columnNames.includes(col));
+
+        if (foundLegacy.length > 0) {
+            log(`⚠️ Found legacy columns in club_join_requests: ${foundLegacy.join(', ')}`, 'init', null, null, 'warn');
+            log('🔧 Recreating table with correct schema...', 'init', null, null, 'warn');
+
+            db.serialize(() => {
+                db.run(`ALTER TABLE club_join_requests RENAME TO club_join_requests_old`, (renameErr) => {
+                    if (renameErr) {
+                        log('Error renaming old table:', 'error', null, renameErr, 'error');
+                        return;
+                    }
+                    db.run(`CREATE TABLE club_join_requests (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        club_id INTEGER NOT NULL,
+                        user_id TEXT NOT NULL,
+                        guild_id TEXT NOT NULL,
+                        full_name TEXT NOT NULL,
+                        email TEXT,
+                        interest_reason TEXT NOT NULL,
+                        experience TEXT,
+                        expectations TEXT,
+                        status TEXT DEFAULT 'pending',
+                        reviewed_by TEXT,
+                        reviewed_at INTEGER,
+                        rejection_reason TEXT,
+                        requested_at INTEGER DEFAULT (strftime('%s', 'now')),
+                        updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+                        FOREIGN KEY (club_id) REFERENCES clubs(id) ON DELETE CASCADE,
+                        CHECK(status IN ('pending', 'approved', 'rejected', 'withdrawn'))
+                    )`, (createErr) => {
+                        if (createErr) {
+                            log('Error creating new table:', 'error', null, createErr, 'error');
+                            return;
+                        }
+
+                        const copyQuery = columnNames.includes('interest_reason')
+                            ? `INSERT INTO club_join_requests 
+                               (id, club_id, user_id, guild_id, full_name, email, interest_reason, 
+                                experience, expectations, status, reviewed_by, reviewed_at, 
+                                rejection_reason, requested_at, updated_at)
+                               SELECT id, club_id, user_id, 
+                                      COALESCE(guild_id, ''), 
+                                      full_name, email, interest_reason,
+                                      experience, expectations, status, reviewed_by, reviewed_at,
+                                      rejection_reason, requested_at, updated_at
+                               FROM club_join_requests_old`
+                            : `INSERT INTO club_join_requests 
+                               (id, club_id, user_id, guild_id, full_name, email, interest_reason, 
+                                experience, expectations, status, reviewed_by, reviewed_at, 
+                                rejection_reason, requested_at, updated_at)
+                               SELECT id, club_id, user_id, 
+                                      COALESCE(guild_id, ''), 
+                                      full_name, email, 
+                                      COALESCE(reason, 'No reason provided'),
+                                      experience, expectations, status, reviewed_by, reviewed_at,
+                                      rejection_reason, requested_at, updated_at
+                               FROM club_join_requests_old`;
+
+                        db.run(copyQuery, (copyErr) => {
+                            if (copyErr) {
+                                log('Error copying data:', 'error', null, copyErr, 'error');
+                                db.run(`DROP TABLE IF EXISTS club_join_requests`);
+                                db.run(`ALTER TABLE club_join_requests_old RENAME TO club_join_requests`);
+                                return;
+                            }
+
+                            db.run(`DROP TABLE club_join_requests_old`, (dropErr) => {
+                                if (dropErr) {
+                                    log('Error dropping old table:', 'error', null, dropErr, 'error');
+                                } else {
+                                    log('✅ Successfully migrated club_join_requests schema', 'init', null, null, 'success');
+                                    log(`   Removed legacy columns: ${foundLegacy.join(', ')}`, 'init', null, null, 'success');
+                                }
+                            });
+                        });
+                    });
+                });
+            });
+
+            return;
+        }
+
+        const requiredColumns = [
+            { name: 'guild_id', type: 'TEXT NOT NULL', defaultValue: "''", needsPopulate: true },
+            { name: 'full_name', type: 'TEXT NOT NULL', defaultValue: "''", needsPopulate: false },
+            { name: 'interest_reason', type: 'TEXT NOT NULL', defaultValue: "''", needsPopulate: false },
+            { name: 'email', type: 'TEXT', defaultValue: 'NULL', needsPopulate: false },
+            { name: 'experience', type: 'TEXT', defaultValue: 'NULL', needsPopulate: false },
+            { name: 'expectations', type: 'TEXT', defaultValue: 'NULL', needsPopulate: false },
+            { name: 'status', type: 'TEXT', defaultValue: "'pending'", needsPopulate: false },
+            { name: 'reviewed_by', type: 'TEXT', defaultValue: 'NULL', needsPopulate: false },
+            { name: 'reviewed_at', type: 'INTEGER', defaultValue: 'NULL', needsPopulate: false },
+            { name: 'rejection_reason', type: 'TEXT', defaultValue: 'NULL', needsPopulate: false },
+            { name: 'requested_at', type: 'INTEGER', defaultValue: "(strftime('%s', 'now'))", needsPopulate: false },
+            { name: 'updated_at', type: 'INTEGER', defaultValue: "(strftime('%s', 'now'))", needsPopulate: false }
+        ];
+
+        let missingColumns = [];
+
+        requiredColumns.forEach(col => {
+            if (!columnNames.includes(col.name)) {
+                missingColumns.push(col);
+            }
+        });
+
+        if (missingColumns.length > 0) {
+            log(`🔧 Adding ${missingColumns.length} missing columns to club_join_requests`, 'init', { columns: missingColumns.map(c => c.name) }, null, 'warn');
+
+            missingColumns.forEach((col) => {
+                db.run(`ALTER TABLE club_join_requests ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`, (err) => {
+                    if (err && !err.message.includes('duplicate')) {
+                        log(`Error adding ${col.name} column:`, 'error', null, err, 'error');
+                    } else {
+                        log(`✅ Added ${col.name} column to club_join_requests`, 'init', null, null, 'success');
+
+                        if (col.name === 'guild_id' && col.needsPopulate) {
+                            db.run(`
+                                UPDATE club_join_requests 
+                                SET guild_id = (
+                                    SELECT guild_id 
+                                    FROM clubs 
+                                    WHERE clubs.id = club_join_requests.club_id
+                                )
+                                WHERE guild_id = '' OR guild_id IS NULL
+                            `, (updateErr) => {
+                                if (updateErr) {
+                                    log('Error populating guild_id:', 'error', null, updateErr, 'error');
+                                } else {
+                                    log('✅ Populated guild_id for existing join requests', 'init', null, null, 'success');
+                                }
+                            });
+                        }
+                    }
+                });
+            });
+        } else {
+            log('✓ club_join_requests schema is up to date', 'init');
+        }
+    });
+}
+
 function createClubEventsTableWithMigration() {
     db.all("PRAGMA table_info(club_events)", (err, columns) => {
         if (err || !columns || columns.length === 0) {
-            // Table doesn't exist, create fresh
             createClubEventsTableFresh();
         } else {
-            // Table exists, check if migration needed
             const columnNames = columns.map(col => col.name);
             const hasOldDate = columnNames.includes("date");
             const hasEventDate = columnNames.includes("event_date");
@@ -559,7 +699,7 @@ function migrateClubEventsDateColumn() {
     db.serialize(() => {
         db.get("SELECT COUNT(*) as count FROM club_events", [], (err, row) => {
             const count = row?.count || 0;
-            
+
             if (count > 0) {
                 log(`📦 Backing up ${count} events...`, 'init');
                 db.run(`CREATE TABLE club_events_backup AS SELECT * FROM club_events`, () => {
@@ -681,9 +821,9 @@ function ensureEventParticipantsColumns() {
             log('Error checking event_participants schema:', 'error', null, err, 'error');
             return;
         }
-        
+
         const existingColumns = columns ? columns.map(col => col.name) : [];
-        
+
         if (!existingColumns.includes('guild_id')) {
             log('Adding missing guild_id column to event_participants', 'init', null, null, 'warn');
             db.run(`ALTER TABLE event_participants ADD COLUMN guild_id TEXT NOT NULL DEFAULT ''`, (err) => {
@@ -694,7 +834,7 @@ function ensureEventParticipantsColumns() {
                 }
             });
         }
-        
+
         const requiredColumns = [
             { name: 'team_name', type: 'TEXT', defaultValue: 'NULL' },
             { name: 'team_id', type: 'TEXT', defaultValue: 'NULL' },
@@ -710,7 +850,7 @@ function ensureEventParticipantsColumns() {
             { name: 'feedback', type: 'TEXT', defaultValue: 'NULL' },
             { name: 'updated_at', type: 'INTEGER', defaultValue: "(strftime('%s', 'now'))" }
         ];
-        
+
         requiredColumns.forEach(col => {
             if (!existingColumns.includes(col.name)) {
                 const alterSQL = `ALTER TABLE event_participants ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`;
@@ -760,6 +900,7 @@ function createClubAnnouncementsTable() {
         { name: "attachments", type: "TEXT", defaultValue: "NULL" },
         { name: "message_id", type: "TEXT", defaultValue: "NULL" },
         { name: "channel_id", type: "TEXT", defaultValue: "NULL" },
+        { name: "webhook_url", type: "TEXT", defaultValue: "NULL" },
         { name: "edited_at", type: "INTEGER", defaultValue: "NULL" },
         { name: "deleted_at", type: "INTEGER", defaultValue: "NULL" },
         { name: "deleted_by", type: "TEXT", defaultValue: "NULL" },
@@ -878,7 +1019,7 @@ function createClubIndexes() {
             log('Index error:', 'error', null, err, 'error');
         }
     }));
-    
+
     log('✓ Club indexes created', 'init');
 }
 
@@ -909,7 +1050,7 @@ function createClubTriggers() {
             if (err) log(`Trigger ${trigger.name} error:`, 'error', null, err, 'error');
         });
     });
-    
+
     log('✓ Club triggers created', 'init');
 }
 
@@ -942,7 +1083,7 @@ function createClubViews() {
     `, (err) => {
         if (err) log('View upcoming_events error:', 'error', null, err, 'error');
     });
-    
+
     log('✓ Club views created', 'init');
 }
 
@@ -955,7 +1096,7 @@ function migrateTable(tableName, columns) {
     db.all(`PRAGMA table_info(${tableName})`, (err, existingColumns) => {
         if (err) return;
         const existing = existingColumns.map(col => col.name);
-        
+
         columns.forEach(col => {
             if (!existing.includes(col.name)) {
                 db.run(`ALTER TABLE ${tableName} ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`, (err) => {
@@ -1042,12 +1183,12 @@ async function hasClubPermission(clubId, userId, permission = 'moderate') {
     return false;
 }
 
-export { 
-    initializeDatabase, 
-    db, 
-    getClubByIdentifier, 
-    isClubPresident, 
-    isClubModerator, 
+export {
+    initializeDatabase,
+    db,
+    getClubByIdentifier,
+    isClubPresident,
+    isClubModerator,
     hasClubPermission,
-    generateSlug 
+    generateSlug
 };

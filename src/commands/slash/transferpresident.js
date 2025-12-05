@@ -20,10 +20,11 @@ export const data = new SlashCommandBuilder()
             .setDescription('Club name or slug')
             .setRequired(true)
             .setAutocomplete(true))
-    .addUserOption(option =>
+    .addStringOption(option =>
         option.setName('new_president')
             .setDescription('New president (must be verified club member)')
-            .setRequired(true))
+            .setRequired(true)
+            .setAutocomplete(true))
     .addStringOption(option =>
         option.setName('reason')
             .setDescription('Reason for transfer')
@@ -34,7 +35,7 @@ export async function execute(interaction) {
     await interaction.deferReply({ ephemeral: true });
 
     const clubIdentifier = interaction.options.getString('club');
-    const newPresident = interaction.options.getUser('new_president');
+    const newPresidentId = interaction.options.getString('new_president');
     const reason = interaction.options.getString('reason');
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID || 'YOUR_VERIFIED_ROLE_ID';
 
@@ -51,6 +52,15 @@ export async function execute(interaction) {
         if (club.status !== 'active') {
             return await interaction.editReply({
                 content: `❌ This club is currently ${club.status}. Presidency cannot be transferred.`
+            });
+        }
+
+        let newPresident;
+        try {
+            newPresident = await interaction.client.users.fetch(newPresidentId);
+        } catch (error) {
+            return await interaction.editReply({
+                content: '❌ Could not find the specified user. Please try again.'
             });
         }
 
@@ -128,15 +138,12 @@ async function requestOwnerApproval(interaction, club, newPresident, reason, ini
         // Create pending transfer record
         const transferId = `transfer_${club.id}_${Date.now()}`;
         
-        // Store in temporary storage (you could use a database table or in-memory map)
-        // For simplicity, we'll use the audit log and check button custom_id
-        
         const approvalEmbed = new EmbedBuilder()
             .setColor('#FFA500')
             .setTitle('🔄 Club Presidency Transfer - Approval Required')
             .setDescription(`A ${initiatorRole} has requested to transfer club presidency and requires your approval.`)
             .addFields(
-                { name: '🏛️ Club', value: club.name, inline: true },
+                { name: '🛏️ Club', value: club.name, inline: true },
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '👤 Current President', value: `<@${club.president_user_id}>`, inline: true },
                 { name: '👤 New President', value: `${newPresident} (${newPresident.tag})`, inline: true },
@@ -198,7 +205,7 @@ async function requestOwnerApproval(interaction, club, newPresident, reason, ini
             .setTitle('⏳ Transfer Request Sent')
             .setDescription(`Your request to transfer presidency of **${club.name}** has been sent to the server owner for approval.`)
             .addFields(
-                { name: '🏛️ Club', value: club.name, inline: true },
+                { name: '🛏️ Club', value: club.name, inline: true },
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '👤 New President', value: newPresident.tag, inline: true },
                 { name: '📝 Reason', value: reason, inline: false },
@@ -230,11 +237,55 @@ async function executeTransfer(interaction, club, newPresident, reason, initiate
 
         // Get club roles
         const clubRole = club.role_id ? await guild.roles.fetch(club.role_id).catch(() => null) : null;
-        const modRole = club.moderator_role_id ? await guild.roles.fetch(club.moderator_role_id).catch(() => null) : null;
+        let modRole = club.moderator_role_id ? await guild.roles.fetch(club.moderator_role_id).catch(() => null) : null;
 
-        if (!clubRole || !modRole) {
+        if (!modRole && clubRole) {
+            log('Moderator role missing during transfer, creating it now', 'club', { clubId: club.id, clubName: club.name });
+            
+            try {
+                modRole = await guild.roles.create({
+                    name: `${club.name} - Moderator`,
+                    color: clubRole.color,
+                    hoist: true,
+                    mentionable: true,
+                    reason: `Creating missing moderator role for presidency transfer of ${club.name}`
+                });
+
+                // Update database with new moderator role
+                await new Promise((resolve, reject) => {
+                    db.run(
+                        `UPDATE clubs SET moderator_role_id = ?, updated_at = ? WHERE id = ?`,
+                        [modRole.id, Date.now(), club.id],
+                        (err) => {
+                            if (err) reject(err);
+                            else resolve();
+                        }
+                    );
+                });
+
+                log('Created moderator role successfully during transfer', 'club', { 
+                    clubId: club.id, 
+                    clubName: club.name, 
+                    modRoleId: modRole.id 
+                });
+
+            } catch (createError) {
+                log('Failed to create moderator role during transfer', 'club', { clubId: club.id }, createError, 'error');
+                return await interaction.editReply({
+                    content: '❌ Failed to create moderator role. Please contact an administrator.'
+                });
+            }
+        }
+
+        if (!clubRole) {
             return await interaction.editReply({
-                content: '❌ Club roles not found. Please contact an administrator.'
+                content: '❌ Club role not found. Please contact an administrator.'
+            });
+        }
+
+        if (!modRole) {
+            return await interaction.editReply({
+                content: '❌ Failed to create/find moderator role. Please contact an administrator.'
             });
         }
 
@@ -279,8 +330,6 @@ async function executeTransfer(interaction, club, newPresident, reason, initiate
         });
 
         // Update Discord roles
-        // Old president: Keep club role, keep mod role (optional - could remove)
-        // New president: Ensure has both club role and mod role
         if (newPresidentMember) {
             if (!newPresidentMember.roles.cache.has(clubRole.id)) {
                 await newPresidentMember.roles.add(clubRole, 'Became club president');
@@ -290,8 +339,11 @@ async function executeTransfer(interaction, club, newPresident, reason, initiate
             }
         }
 
-        // Optionally keep old president as moderator or demote to regular member
-        // For now, we'll keep them as moderator (they keep the mod role)
+        // Keep old president as moderator (they keep the mod role)
+        // If you want to remove their mod role, uncomment:
+        // if (oldPresidentMember && oldPresidentMember.roles.cache.has(modRole.id)) {
+        //     await oldPresidentMember.roles.remove(modRole, 'No longer president');
+        // }
 
         // Log the transfer
         await new Promise((resolve, reject) => {
@@ -325,7 +377,7 @@ async function executeTransfer(interaction, club, newPresident, reason, initiate
             .setTitle('✅ Presidency Transferred Successfully')
             .setDescription(`**${club.name}** has a new president!`)
             .addFields(
-                { name: '🏛️ Club', value: club.name, inline: true },
+                { name: '🛏️ Club', value: club.name, inline: true },
                 { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                 { name: '👤 Previous President', value: `<@${oldPresidentId}>`, inline: true },
                 { name: '👑 New President', value: `${newPresident} (${newPresident.tag})`, inline: true },
@@ -348,7 +400,7 @@ async function executeTransfer(interaction, club, newPresident, reason, initiate
                 .setTitle('👑 You are now Club President!')
                 .setDescription(`You have been appointed as the president of **${club.name}** in ${guild.name}`)
                 .addFields(
-                    { name: '🏛️ Club', value: club.name, inline: true },
+                    { name: '🛏️ Club', value: club.name, inline: true },
                     { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                     { name: '📝 Reason', value: reason, inline: false },
                     { name: '👑 Your Responsibilities', value: 
@@ -374,7 +426,7 @@ async function executeTransfer(interaction, club, newPresident, reason, initiate
                     .setTitle('🔄 Club Presidency Transferred')
                     .setDescription(`You are no longer the president of **${club.name}**`)
                     .addFields(
-                        { name: '🏛️ Club', value: club.name, inline: true },
+                        { name: '🛏️ Club', value: club.name, inline: true },
                         { name: '🔗 Slug', value: `\`${club.slug}\``, inline: true },
                         { name: '👑 New President', value: newPresident.tag, inline: true },
                         { name: '📝 Reason', value: reason, inline: false },
@@ -562,56 +614,206 @@ export async function handleTransferApproval(interaction, action) {
  * Autocomplete handler
  */
 export async function autocomplete(interaction) {
-    const focusedValue = interaction.options.getFocused();
+    const focusedOption = interaction.options.getFocused(true);
+    const focusedValue = focusedOption.value.toLowerCase();
     const guildId = interaction.guild.id;
     const userId = interaction.user.id;
 
     try {
-        // Check user role to determine which clubs to show
-        const isOwner = interaction.guild.ownerId === userId;
-        const isAdmin = isServerAdmin(interaction.member);
-        const isMod = hasServerPrivilegedRole(interaction.member);
+        // Handle 'club' option autocomplete
+        if (focusedOption.name === 'club') {
+            // Check user role to determine which clubs to show
+            const isOwner = interaction.guild.ownerId === userId;
+            const isAdmin = isServerAdmin(interaction.member);
+            const isMod = hasServerPrivilegedRole(interaction.member);
 
-        let query, params;
+            let query, params;
 
-        if (isOwner || isAdmin || isMod) {
-            // Show all active clubs
-            query = `SELECT id, name, slug FROM clubs WHERE guild_id = ? AND status = 'active' ORDER BY name ASC`;
-            params = [guildId];
-        } else {
-            // Show only clubs where user is president
-            query = `SELECT id, name, slug FROM clubs WHERE guild_id = ? AND president_user_id = ? AND status = 'active' ORDER BY name ASC`;
-            params = [guildId, userId];
-        }
+            if (isOwner || isAdmin || isMod) {
+                // Show all active clubs
+                query = `SELECT id, name, slug FROM clubs WHERE guild_id = ? AND status = 'active' ORDER BY name ASC`;
+                params = [guildId];
+            } else {
+                // Show only clubs where user is president
+                query = `SELECT id, name, slug FROM clubs WHERE guild_id = ? AND president_user_id = ? AND status = 'active' ORDER BY name ASC`;
+                params = [guildId, userId];
+            }
 
-        const clubs = await new Promise((resolve, reject) => {
-            db.all(query, params, (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
+            const clubs = await new Promise((resolve, reject) => {
+                db.all(query, params, (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                });
             });
-        });
 
-        const filtered = clubs
-            .filter(club => 
-                club.name.toLowerCase().includes(focusedValue.toLowerCase()) ||
-                club.slug.toLowerCase().includes(focusedValue.toLowerCase())
-            )
-            .slice(0, 25)
-            .map(club => ({
-                name: `${club.name} (${club.slug})`,
+            // If no clubs found at all
+            if (!clubs || clubs.length === 0) {
+                await interaction.respond([
+                    {
+                        name: isOwner || isAdmin || isMod 
+                            ? '❌ No active clubs found in this server'
+                            : '❌ No clubs found where you are president',
+                        value: 'no_clubs_found'
+                    }
+                ]);
+                return;
+            }
+
+            // Filter clubs based on search input
+            let filtered;
+            
+            if (!focusedValue || focusedValue.trim() === '') {
+                filtered = clubs.slice(0, 25);
+            } else {
+                filtered = clubs.filter(club => {
+                    const nameMatch = club.name.toLowerCase().includes(focusedValue);
+                    const slugMatch = club.slug.toLowerCase().includes(focusedValue);
+                    return nameMatch || slugMatch;
+                });
+            }
+
+            // Take only first 25 results (Discord limit)
+            const results = filtered.slice(0, 25).map(club => ({
+                name: `${club.name} (${club.slug})`.substring(0, 100),
                 value: club.slug
             }));
 
-        if (filtered.length === 0) {
-            filtered.push({
-                name: '❌ No clubs found or no permission',
-                value: 'no_clubs'
-            });
+            // If no matches found after filtering
+            if (results.length === 0) {
+                await interaction.respond([
+                    {
+                        name: `❌ No clubs matching "${focusedValue}"`,
+                        value: 'no_match'
+                    }
+                ]);
+                return;
+            }
+
+            await interaction.respond(results);
+            return;
         }
 
-        await interaction.respond(filtered);
-    } catch (error) {
-        log('Error in transferpresident autocomplete', 'club', null, error, 'error');
+        // ✅ Handle 'new_president' option autocomplete - show only club members
+        if (focusedOption.name === 'new_president') {
+            // Get the selected club first
+            const clubIdentifier = interaction.options.getString('club');
+            
+            if (!clubIdentifier || clubIdentifier === 'no_clubs_found' || clubIdentifier === 'no_match') {
+                await interaction.respond([
+                    {
+                        name: '⚠️ Please select a club first',
+                        value: 'select_club_first'
+                    }
+                ]);
+                return;
+            }
+
+            // Get club details
+            const club = await getClubByIdentifier(guildId, clubIdentifier);
+            
+            if (!club) {
+                await interaction.respond([
+                    {
+                        name: '❌ Club not found',
+                        value: 'club_not_found'
+                    }
+                ]);
+                return;
+            }
+
+            // Get all active club members (excluding current president)
+            const members = await new Promise((resolve, reject) => {
+                db.all(
+                    `SELECT cm.user_id, cm.role, vu.real_name
+                     FROM club_members cm
+                     LEFT JOIN verified_users vu ON cm.user_id = vu.user_id
+                     WHERE cm.club_id = ? AND cm.status = 'active' AND cm.user_id != ?
+                     ORDER BY 
+                        CASE cm.role 
+                            WHEN 'moderator' THEN 1
+                            WHEN 'member' THEN 2
+                            ELSE 3
+                        END,
+                        vu.real_name ASC`,
+                    [club.id, club.president_user_id],
+                    (err, rows) => {
+                        if (err) reject(err);
+                        else resolve(rows || []);
+                    }
+                );
+            });
+
+            if (members.length === 0) {
+                await interaction.respond([
+                    {
+                        name: '❌ No eligible members found in this club',
+                        value: 'no_members'
+                    }
+                ]);
+                return;
+            }
+
+            // Fetch Discord members to get usernames
+            const memberOptions = [];
+            
+            for (const member of members.slice(0, 25)) { // Limit to 25 for Discord
+                try {
+                    const discordMember = await interaction.guild.members.fetch(member.user_id);
+                    const roleEmoji = member.role === 'moderator' ? '🛡️ ' : '👤 ';
+                    const displayName = member.real_name || discordMember.user.username;
+                    
+                    // Filter by search term
+                    if (!focusedValue || 
+                        displayName.toLowerCase().includes(focusedValue) ||
+                        discordMember.user.username.toLowerCase().includes(focusedValue)) {
+                        memberOptions.push({
+                            name: `${roleEmoji}${displayName} (@${discordMember.user.username})`.substring(0, 100),
+                            value: member.user_id
+                        });
+                    }
+                } catch (error) {
+                    // Skip members who can't be fetched
+                    continue;
+                }
+            }
+
+            if (memberOptions.length === 0) {
+                await interaction.respond([
+                    {
+                        name: focusedValue 
+                            ? `❌ No members matching "${focusedValue}"`
+                            : '❌ No eligible members found',
+                        value: 'no_match'
+                    }
+                ]);
+                return;
+            }
+
+            await interaction.respond(memberOptions.slice(0, 25));
+            return;
+        }
+
+        // Unknown option
         await interaction.respond([]);
+
+    } catch (error) {
+        log('Error in transferpresident autocomplete', 'club', { 
+            userId, 
+            guildId, 
+            focusedOption: focusedOption?.name,
+            focusedValue: focusedOption?.value 
+        }, error, 'error');
+        
+        // Always respond, even on error
+        try {
+            await interaction.respond([
+                {
+                    name: '❌ Error loading data - please try again',
+                    value: 'error'
+                }
+            ]);
+        } catch (respondError) {
+            log('Failed to respond to autocomplete after error', 'club', null, respondError, 'error');
+        }
     }
 }

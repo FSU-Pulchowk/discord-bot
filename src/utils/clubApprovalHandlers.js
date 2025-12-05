@@ -1,6 +1,6 @@
 // src/utils/clubApprovalHandlers.js
-import { 
-    EmbedBuilder, 
+import {
+    EmbedBuilder,
     PermissionsBitField,
     ChannelType,
     ButtonBuilder,
@@ -70,12 +70,14 @@ export async function handleClubApproval(interaction) {
                 `UPDATE clubs SET 
                     status = 'active',
                     role_id = ?,
+                    moderator_role_id = ?,
                     channel_id = ?,
                     voice_channel_id = ?,
                     updated_at = ?
                  WHERE id = ?`,
                 [
                     createdResources.role.id,
+                    createdResources.modRole.id,
                     createdResources.textChannel.id,
                     createdResources.voiceChannel.id,
                     Date.now(),
@@ -93,7 +95,7 @@ export async function handleClubApproval(interaction) {
             try {
                 const president = await guild.members.fetch(club.president_user_id);
                 await president.roles.add(createdResources.role, 'Club approved - president role');
-                
+
                 // Add president as member in database
                 await new Promise((resolve, reject) => {
                     db.run(
@@ -117,12 +119,13 @@ export async function handleClubApproval(interaction) {
                         { name: 'Text Channel', value: `<#${createdResources.textChannel.id}>`, inline: true },
                         { name: 'Voice Channel', value: `<#${createdResources.voiceChannel.id}>`, inline: true },
                         { name: 'Club Role', value: `<@&${createdResources.role.id}>`, inline: true },
-                        { name: 'Next Steps', value: 
-                            '• Your club embed is now in the #clubs channel\n' +
-                            '• Members can join by clicking the Join button\n' +
-                            '• Use `/createevent` to schedule events\n' +
-                            '• Use `/announce` to post announcements\n' +
-                            '• Build your team and start activities!',
+                        {
+                            name: 'Next Steps', value:
+                                '• Your club embed is now in the #clubs channel\n' +
+                                '• Members can join by clicking the Join button\n' +
+                                '• Use `/createevent` to schedule events\n' +
+                                '• Use `/announce` to post announcements\n' +
+                                '• Build your team and start activities!',
                             inline: false
                         }
                     )
@@ -148,9 +151,9 @@ export async function handleClubApproval(interaction) {
                 channelWelcome.addFields({
                     name: 'Getting Started',
                     value: '• Share the club join link with interested members\n' +
-                           '• Plan your first meeting or event\n' +
-                           '• Build your team of trusted members\n' +
-                           '• Start making an impact!',
+                        '• Plan your first meeting or event\n' +
+                        '• Build your team of trusted members\n' +
+                        '• Start making an impact!',
                     inline: false
                 });
 
@@ -167,7 +170,7 @@ export async function handleClubApproval(interaction) {
         if (CLUBS_CHANNEL_ID) {
             try {
                 const clubsChannel = await guild.channels.fetch(CLUBS_CHANNEL_ID);
-                
+
                 const clubEmbed = new EmbedBuilder()
                     .setColor(createdResources.role.color || '#5865F2')
                     .setTitle(`${club.name}`)
@@ -214,7 +217,7 @@ export async function handleClubApproval(interaction) {
                     guild.id,
                     interaction.user.id,
                     clubId.toString(),
-                    JSON.stringify({ 
+                    JSON.stringify({
                         clubName: club.name,
                         roleId: createdResources.role.id,
                         channelId: createdResources.textChannel.id
@@ -295,17 +298,18 @@ export async function handleClubRejection(interaction) {
         if (club.president_user_id) {
             try {
                 const president = await interaction.client.users.fetch(club.president_user_id);
-                
+
                 const rejectionEmbed = new EmbedBuilder()
                     .setColor('#FF0000')
                     .setTitle('Club Registration Not Approved')
                     .setDescription(`Unfortunately, your club registration for **${club.name}** has not been approved.`)
                     .addFields(
-                        { name: 'Next Steps', value: 
-                            '• Review your club details\n' +
-                            '• Contact an administrator for feedback\n' +
-                            '• Make necessary adjustments\n' +
-                            '• Submit a new registration if desired',
+                        {
+                            name: 'Next Steps', value:
+                                '• Review your club details\n' +
+                                '• Contact an administrator for feedback\n' +
+                                '• Make necessary adjustments\n' +
+                                '• Submit a new registration if desired',
                             inline: false
                         }
                     )
@@ -360,10 +364,10 @@ export async function handleClubRejection(interaction) {
 async function createClubInfrastructure(guild, club) {
     try {
         const botMember = guild.members.me;
-        
+
         // Get random color (await this async function!)
         const roleColor = await getRandomColor(guild);
-        
+
         // Create club role (for all members)
         const role = await guild.roles.create({
             name: club.name,
@@ -490,7 +494,7 @@ async function createClubInfrastructure(guild, club) {
         });
 
         const botPerms = textChannel.permissionsFor(botMember);
-        const hasRequiredPerms = botPerms && 
+        const hasRequiredPerms = botPerms &&
             botPerms.has(PermissionsBitField.Flags.ViewChannel) &&
             botPerms.has(PermissionsBitField.Flags.SendMessages) &&
             botPerms.has(PermissionsBitField.Flags.EmbedLinks);
@@ -508,6 +512,7 @@ async function createClubInfrastructure(guild, club) {
         return {
             success: true,
             role,
+            modRole,
             textChannel,
             voiceChannel
         };
@@ -550,7 +555,7 @@ async function getRandomColor(guild) {
                 }
             );
         });
-        
+
         const usedColors = [];
         for (const club of clubs) {
             try {
@@ -562,13 +567,13 @@ async function getRandomColor(guild) {
                 continue;
             }
         }
-        
+
         const availableColors = CLUB_COLORS.filter(color => !usedColors.includes(color));
-        
+
         if (availableColors.length === 0) {
             return CLUB_COLORS[Math.floor(Math.random() * CLUB_COLORS.length)];
         }
-        
+
         return availableColors[Math.floor(Math.random() * availableColors.length)];
     } catch (error) {
         log('Error getting unique color, using random', 'club', null, error, 'warn');

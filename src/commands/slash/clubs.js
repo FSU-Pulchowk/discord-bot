@@ -258,9 +258,9 @@ async function handleInfo(interaction) {
         // Get upcoming events
         const upcomingEvents = await new Promise((resolve, reject) => {
             db.all(
-                `SELECT title, date, start_time FROM club_events 
-                 WHERE club_id = ? AND date >= date('now') AND status = 'scheduled'
-                 ORDER BY date LIMIT 3`,
+                `SELECT title, event_date, start_time FROM club_events 
+                 WHERE club_id = ? AND event_date >= date('now') AND status = 'scheduled'
+                 ORDER BY event_date LIMIT 3`,
                 [club.id],
                 (err, rows) => {
                     if (err) reject(err);
@@ -296,7 +296,7 @@ async function handleInfo(interaction) {
         }
 
         if (upcomingEvents.length > 0) {
-            const eventList = upcomingEvents.map(e => `• ${e.title} - ${e.date} at ${e.start_time || 'TBA'}`).join('\n');
+            const eventList = upcomingEvents.map(e => `• ${e.title} - ${e.event_date} at ${e.start_time || 'TBA'}`).join('\n');
             embed.addFields({ name: '📆 Upcoming Events', value: eventList, inline: false });
         }
 
@@ -384,16 +384,16 @@ async function handleEvents(interaction) {
             query = `SELECT e.*, c.name as club_name 
                      FROM club_events e
                      JOIN clubs c ON e.club_id = c.id
-                     WHERE e.guild_id = ? AND LOWER(c.name) = LOWER(?) AND e.date >= date('now') AND e.status = 'scheduled'
-                     ORDER BY e.date, e.start_time
+                     WHERE e.guild_id = ? AND LOWER(c.name) = LOWER(?) AND e.event_date >= date('now') AND e.status = 'scheduled'
+                     ORDER BY e.event_date, e.start_time
                      LIMIT 10`;
             params = [guildId, clubName];
         } else {
             query = `SELECT e.*, c.name as club_name 
                      FROM club_events e
                      JOIN clubs c ON e.club_id = c.id
-                     WHERE e.guild_id = ? AND e.date >= date('now') AND e.status = 'scheduled'
-                     ORDER BY e.date, e.start_time
+                     WHERE e.guild_id = ? AND e.event_date >= date('now') AND e.status = 'scheduled'
+                     ORDER BY e.event_date, e.start_time
                      LIMIT 10`;
             params = [guildId];
         }
@@ -436,7 +436,7 @@ async function handleEvents(interaction) {
             embed.addFields({
                 name: `${event.title} [${event.club_name}]`,
                 value: `**Type:** ${eventType}\n` +
-                    `**Date:** ${event.date} at ${event.start_time || 'TBA'}\n` +
+                    `**Date:** ${event.event_date} at ${event.start_time || 'TBA'}\n` +
                     `**Location:** ${event.location || 'TBA'}\n` +
                     `**Attendees:** ${attendeeInfo}\n` +
                     `${event.description ? `*${event.description.substring(0, 100)}...*` : ''}`,
