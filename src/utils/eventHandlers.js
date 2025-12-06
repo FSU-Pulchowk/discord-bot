@@ -1,13 +1,16 @@
 // src/utils/eventHandlers.js
-import { 
-    EmbedBuilder, 
-    ButtonBuilder, 
-    ButtonStyle, 
+import {
+    EmbedBuilder,
+    ButtonBuilder,
+    ButtonStyle,
     ActionRowBuilder
 } from 'discord.js';
 import { db } from '../database.js';
 import { log } from './debug.js';
 import { isServerModerator, checkClubPermission } from './clubPermissions.js';
+import { emailService } from '../services/emailService.js';
+
+const emailSvc = new emailService();
 
 /**
  * Handle event approval button (Server Admins only)
@@ -109,10 +112,10 @@ export async function handleEventApproval(interaction) {
 
         // Add participant info
         const maxPart = event.max_participants || event.min_participants || 'Unlimited';
-        eventEmbed.addFields({ 
-            name: '📊 Participants', 
-            value: `${participantCount} / ${maxPart}`, 
-            inline: true 
+        eventEmbed.addFields({
+            name: '📊 Participants',
+            value: `${participantCount} / ${maxPart}`,
+            inline: true
         });
 
         // Add registration info if required
@@ -182,10 +185,10 @@ export async function handleEventApproval(interaction) {
 
         // Post to club channel
         const clubChannel = await interaction.guild.channels.fetch(event.club_channel_id);
-        const eventMessage = await clubChannel.send({ 
+        const eventMessage = await clubChannel.send({
             content: event.role_id ? `<@&${event.role_id}> New event announced!` : null,
-            embeds: [eventEmbed], 
-            components: [row] 
+            embeds: [eventEmbed],
+            components: [row]
         });
 
         // Save message ID
@@ -202,12 +205,12 @@ export async function handleEventApproval(interaction) {
 
         // Post to public Event Announcements channel if visibility allows
         const EVENT_ANNOUNCEMENTS_CHANNEL_ID = process.env.EVENT_ANNOUNCEMENTS_CHANNEL_ID;
-        if (EVENT_ANNOUNCEMENTS_CHANNEL_ID && 
+        if (EVENT_ANNOUNCEMENTS_CHANNEL_ID &&
             EVENT_ANNOUNCEMENTS_CHANNEL_ID !== 'YOUR_EVENT_ANNOUNCEMENTS_CHANNEL_ID' &&
             (event.visibility === 'guild' || event.visibility === 'public')) {
             try {
                 const eventAnnouncementsChannel = await interaction.guild.channels.fetch(EVENT_ANNOUNCEMENTS_CHANNEL_ID);
-                
+
                 const publicEventEmbed = EmbedBuilder.from(eventEmbed)
                     .setFooter({ text: `Hosted by ${event.club_name} | Join the club to participate!` });
 
@@ -220,7 +223,7 @@ export async function handleEventApproval(interaction) {
 
                 const publicRow = new ActionRowBuilder().addComponents(infoButton);
 
-                await eventAnnouncementsChannel.send({ 
+                await eventAnnouncementsChannel.send({
                     content: `🎉 **New Event: ${event.title}**`,
                     embeds: [publicEventEmbed],
                     components: [publicRow]
@@ -249,16 +252,72 @@ export async function handleEventApproval(interaction) {
                     { name: '🏛️ Club', value: event.club_name, inline: true },
                     { name: '🔗 Slug', value: `\`${event.club_slug}\``, inline: true },
                     { name: '📢 Posted in', value: `<#${event.club_channel_id}>`, inline: false },
-                    { name: '✅ Next Steps', value: 
-                        '• Event is now live for registrations\n' +
-                        '• Members can join using the Join Event button\n' +
-                        '• Use View Participants to see registrations\n' +
-                        '• Registration closes when capacity is reached'
+                    {
+                        name: '✅ Next Steps', value:
+                            '• Event is now live for registrations\n' +
+                            '• Members can join using the Join Event button\n' +
+                            '• Use View Participants to see registrations\n' +
+                            '• Registration closes when capacity is reached'
                     }
                 )
                 .setTimestamp();
 
             await creator.send({ embeds: [notifyEmbed] });
+
+            // Send email notification
+            try {
+                const creatorEmail = await new Promise((resolve, reject) => {
+                    db.get(
+                        `SELECT email FROM verified_users WHERE user_id = ?`,
+                        [event.created_by],
+                        (err, row) => {
+                            if (err) reject(err);
+                            else resolve(row?.email);
+                        }
+                    );
+                });
+
+                if (creatorEmail) {
+                    const emailHtml = `
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                            <h2 style="color: #00FF00;">🎉 Event Approved!</h2>
+                            <p>Great news! Your event <strong>${event.title}</strong> has been approved and is now live!</p>
+                            
+                            <h3>📋 Event Details:</h3>
+                            <ul>
+                                <li><strong>Event:</strong> ${event.title}</li>
+                                <li><strong>Club:</strong> ${event.club_name}</li>
+                                <li><strong>Date:</strong> ${event.event_date}</li>
+                                <li><strong>Time:</strong> ${event.start_time || 'TBA'}</li>
+                                <li><strong>Venue:</strong> ${event.venue || 'TBA'}</li>
+                            </ul>
+                            
+                            <h3>🎯 Next Steps:</h3>
+                            <ul>
+                                <li>Event is now live for registrations</li>
+                                <li>Members can join using the Join Event button</li>
+                                <li>Use "View Participants" to see registrations</li>
+                                <li>Registration closes when capacity is reached</li>
+                            </ul>
+                            
+                            <p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                                Best regards,<br>
+                                <strong>FSU Pulchowk Discord Bot</strong>
+                            </p>
+                        </div>
+                    `;
+
+                    await emailSvc.sendEmail(
+                        creatorEmail,
+                        `🎉 ${event.title} - Event Approved!`,
+                        emailHtml
+                    );
+                    log('Sent event approval email', 'event', { email: creatorEmail, eventId });
+                }
+            } catch (emailError) {
+                log('Error sending event approval email', 'event', null, emailError, 'warn');
+            }
+
         } catch (dmError) {
             log('Failed to notify event creator', 'club', null, dmError, 'warn');
         }
@@ -273,11 +332,11 @@ export async function handleEventApproval(interaction) {
                     event.club_id,
                     interaction.user.id,
                     eventId.toString(),
-                    JSON.stringify({ 
-                        clubId: event.club_id, 
+                    JSON.stringify({
+                        clubId: event.club_id,
                         clubName: event.club_name,
                         clubSlug: event.club_slug,
-                        title: event.title 
+                        title: event.title
                     })
                 ],
                 (err) => {
@@ -371,11 +430,12 @@ export async function handleEventRejection(interaction) {
                 .addFields(
                     { name: '🏛️ Club', value: event.club_name, inline: true },
                     { name: '🔗 Slug', value: `\`${event.club_slug}\``, inline: true },
-                    { name: '💡 What you can do', value: 
-                        '• Review the event details\n' +
-                        '• Contact an admin for feedback\n' +
-                        '• Make necessary changes\n' +
-                        '• Submit a new event request'
+                    {
+                        name: '💡 What you can do', value:
+                            '• Review the event details\n' +
+                            '• Contact an admin for feedback\n' +
+                            '• Make necessary changes\n' +
+                            '• Submit a new event request'
                     }
                 )
                 .setTimestamp();
@@ -395,11 +455,11 @@ export async function handleEventRejection(interaction) {
                     event.club_id,
                     interaction.user.id,
                     eventId.toString(),
-                    JSON.stringify({ 
-                        clubId: event.club_id, 
+                    JSON.stringify({
+                        clubId: event.club_id,
                         clubName: event.club_name,
                         clubSlug: event.club_slug,
-                        title: event.title 
+                        title: event.title
                     })
                 ],
                 (err) => {
@@ -430,6 +490,22 @@ export async function handleJoinEventButton(interaction) {
         if (PULCHOWKIAN_ROLE_ID && !interaction.member.roles.cache.has(PULCHOWKIAN_ROLE_ID)) {
             return await interaction.reply({
                 content: '❌ Only verified @Pulchowkian members can join events.',
+                ephemeral: true
+            });
+        }
+
+        // Check event-specific role eligibility
+        const { checkEventEligibility } = await import('./roleSelector.js');
+        const eligibilityCheck = await checkEventEligibility(
+            interaction.user.id,
+            eventId,
+            interaction.member,
+            db
+        );
+
+        if (!eligibilityCheck.eligible) {
+            return await interaction.reply({
+                content: `❌ **You are not eligible for this event.**\n\n${eligibilityCheck.reason}`,
                 ephemeral: true
             });
         }
@@ -499,7 +575,19 @@ export async function handleJoinEventButton(interaction) {
             return await interaction.reply({ embeds: [formEmbed], ephemeral: true });
         }
 
-        // Register user
+        // Check if payment is required
+        if (event.registration_fee && event.registration_fee > 0) {
+            const { initiateRegistrationWithPayment } = await import('./eventRegistration.js');
+
+            const paymentResult = await initiateRegistrationWithPayment(interaction, eventId, event);
+
+            return await interaction.reply({
+                content: paymentResult.message,
+                ephemeral: true
+            });
+        }
+
+        // Register user (for free events)
         await new Promise((resolve, reject) => {
             db.run(
                 `INSERT INTO event_participants (event_id, user_id, guild_id, rsvp_status) VALUES (?, ?, ?, 'going')`,
@@ -515,7 +603,7 @@ export async function handleJoinEventButton(interaction) {
         const newCount = event.participant_count + 1;
         try {
             const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
-            
+
             // Find and update the Participants field
             const fields = updatedEmbed.data.fields;
             const participantFieldIndex = fields?.findIndex(f => f.name === '📊 Participants');
@@ -546,9 +634,9 @@ export async function handleJoinEventButton(interaction) {
             confirmEmbed.addFields({ name: '📍 Venue', value: event.venue, inline: false });
         }
 
-        confirmEmbed.addFields({ 
-            name: '📋 What\'s Next', 
-            value: 
+        confirmEmbed.addFields({
+            name: '📋 What\'s Next',
+            value:
                 '• You\'ll receive reminders before the event\n' +
                 '• Check the club channel for updates\n' +
                 '• Arrive on time for attendance'
@@ -603,7 +691,7 @@ export async function handleJoinEventButton(interaction) {
                     event.club_id,
                     interaction.user.id,
                     eventId.toString(),
-                    JSON.stringify({ 
+                    JSON.stringify({
                         eventTitle: event.title,
                         clubName: event.club_name,
                         clubSlug: event.club_slug
@@ -621,7 +709,7 @@ export async function handleJoinEventButton(interaction) {
         await interaction.reply({
             content: '❌ An error occurred. Please try again.',
             ephemeral: true
-        }).catch(() => {});
+        }).catch(() => { });
     }
 }
 
@@ -668,10 +756,10 @@ export async function handlePreviewParticipants(interaction) {
             });
         }
 
-        // Get participants
+        // Get confirmed participants (in event_participants table)
         const participants = await new Promise((resolve, reject) => {
             db.all(
-                `SELECT ep.*, vu.real_name, vu.email
+                `SELECT ep.*, vu.real_name, vu.email, 'confirmed' as status_type
                  FROM event_participants ep
                  LEFT JOIN verified_users vu ON ep.user_id = vu.user_id
                  WHERE ep.event_id = ?
@@ -684,35 +772,78 @@ export async function handlePreviewParticipants(interaction) {
             );
         });
 
-        if (participants.length === 0) {
+        // If event has registration fee, also get pending registrations
+        let pendingRegistrations = [];
+        if (event.registration_fee && event.registration_fee > 0) {
+            pendingRegistrations = await new Promise((resolve, reject) => {
+                db.all(
+                    `SELECT er.*, vu.real_name, vu.email, er.payment_status
+                     FROM event_registrations er
+                     LEFT JOIN verified_users vu ON er.user_id = vu.user_id
+                     WHERE er.event_id = ? AND er.payment_status != 'verified'
+                     ORDER BY er.created_at DESC`,
+                    [eventId],
+                    (err, rows) => {
+                        if (err) reject(err);
+                        else resolve(rows || []);
+                    }
+                );
+            });
+        }
+
+        if (participants.length === 0 && pendingRegistrations.length === 0) {
             return await interaction.editReply({
-                content: '📋 No participants registered yet.'
+                content: '📋 No registrations yet.'
             });
         }
 
         // Create participant list embed
         const participantEmbed = new EmbedBuilder()
             .setColor('#5865F2')
-            .setTitle(`👥 Participants for ${event.title}`)
-            .setDescription(`**Club:** ${event.club_name} (\`${event.club_slug}\`)\n**Total:** ${participants.length} ${event.max_participants ? `/ ${event.max_participants}` : ''}`)
+            .setTitle(`👥 Registrations for ${event.title}`)
+            .setDescription(
+                `**Club:** ${event.club_name} (\`${event.club_slug}\`)\n` +
+                `**Confirmed:** ${participants.length}${event.max_participants ? ` / ${event.max_participants}` : ''}` +
+                (pendingRegistrations.length > 0 ? `\n**Pending Payment:** ${pendingRegistrations.length}` : '')
+            )
             .setTimestamp()
             .setFooter({ text: `Event ID: ${eventId}` });
 
-        // Split into chunks if too many
-        const chunkSize = 10;
-        for (let i = 0; i < participants.length; i += chunkSize) {
-            const chunk = participants.slice(i, i + chunkSize);
-            const participantList = chunk.map((p, idx) => {
-                const num = i + idx + 1;
+        // Show confirmed participants first
+        if (participants.length > 0) {
+            const chunkSize = 10;
+            for (let i = 0; i < participants.length; i += chunkSize) {
+                const chunk = participants.slice(i, i + chunkSize);
+                const participantList = chunk.map((p, idx) => {
+                    const num = i + idx + 1;
+                    const name = p.real_name || 'Unknown';
+                    const registeredDate = new Date(p.registration_date * 1000).toLocaleDateString();
+                    const status = p.checked_in ? '✅ Checked In' : '✅ Confirmed';
+                    return `${num}. **${name}** (<@${p.user_id}>)\n   📧 ${p.email || 'N/A'} • 📅 ${registeredDate} • ${status}`;
+                }).join('\n\n');
+
+                participantEmbed.addFields({
+                    name: i === 0 ? '✅ Confirmed Participants' : `Participants ${i + 1}-${Math.min(i + chunkSize, participants.length)}`,
+                    value: participantList,
+                    inline: false
+                });
+            }
+        }
+
+        // Show pending payments separately
+        if (pendingRegistrations.length > 0) {
+            const pendingList = pendingRegistrations.slice(0, 10).map((p, idx) => {
                 const name = p.real_name || 'Unknown';
-                const registeredDate = new Date(p.registration_date * 1000).toLocaleDateString();
-                const status = p.checked_in ? '✅ Checked In' : (p.rsvp_status === 'going' ? '⏳ Registered' : '❓ Maybe');
-                return `${num}. **${name}** (<@${p.user_id}>)\n   📧 ${p.email || 'N/A'} • 📅 ${registeredDate} • ${status}`;
+                const registeredDate = new Date(p.created_at * 1000).toLocaleDateString();
+                const statusEmoji = p.payment_status === 'pending' ? '🟡' : (p.payment_status === 'rejected' ? '❌' : '⏳');
+                const statusText = p.payment_status === 'pending' ? 'Pending Verification' :
+                    (p.payment_status === 'rejected' ? 'Payment Rejected' : 'Awaiting Payment');
+                return `${idx + 1}. **${name}** (<@${p.user_id}>)\n   📧 ${p.email || 'N/A'} • 📅 ${registeredDate} • ${statusEmoji} ${statusText}`;
             }).join('\n\n');
 
             participantEmbed.addFields({
-                name: `Participants ${i + 1}-${Math.min(i + chunkSize, participants.length)}`,
-                value: participantList,
+                name: '⏳ Pending Payment Verification',
+                value: pendingList + (pendingRegistrations.length > 10 ? `\n\n_...and ${pendingRegistrations.length - 10} more_` : ''),
                 inline: false
             });
         }

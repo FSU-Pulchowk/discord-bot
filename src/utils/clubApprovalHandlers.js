@@ -9,6 +9,9 @@ import {
 } from 'discord.js';
 import { db } from '../database.js';
 import { log } from './debug.js';
+import { emailService } from '../services/emailService.js';
+
+const emailSvc = new emailService();
 
 /**
  * Handle club approval button
@@ -133,6 +136,178 @@ export async function handleClubApproval(interaction) {
                     .setTimestamp();
 
                 await presidentUser.send({ embeds: [welcomeEmbed] });
+
+                // Send email notification
+                try {
+                    const presidentEmail = await new Promise((resolve, reject) => {
+                        db.get(
+                            `SELECT email FROM verified_users WHERE user_id = ?`,
+                            [club.president_user_id],
+                            (err, row) => {
+                                if (err) reject(err);
+                                else resolve(row?.email);
+                            }
+                        );
+                    });
+
+                    if (presidentEmail) {
+                        const emailHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Club Approved</title>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+            width: 100% !important;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background-color: #4CAF50;
+            padding: 30px 20px;
+            text-align: center;
+            color: #ffffff;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .header-banner {
+            width: 100%;
+            max-width: 500px;
+            height: auto;
+            margin-top: 20px;
+        }
+        .content {
+            padding: 30px;
+            color: #333333;
+        }
+        .content p {
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        .details-box {
+            background-color: #f8f9fa; 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin: 20px 0;
+            border-left: 5px solid #4CAF50;
+        }
+        .details-row {
+            margin: 10px 0;
+            font-size: 16px;
+        }
+        .button-container {
+            margin-top: 30px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .button {
+            display: inline-block;
+            background-color: #007bff;
+            color: #ffffff;
+            padding: 15px 30px;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            transition: background-color 0.3s ease;
+        }
+        .button:hover {
+            background-color: #0056b3;
+        }
+        .footer {
+            background-color: #f0f0f0;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #777777;
+            border-bottom-left-radius: 12px;
+            border-bottom-right-radius: 12px;
+            margin-top: 20px;
+        }
+        @media only screen and (max-width: 600px) {
+            .container { width: 100% !important; margin: 0; border-radius: 0; }
+            .header { border-radius: 0; }
+            .footer { border-radius: 0; }
+            .content { padding: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Club Approved!</h1>
+            <img src="https://abhishekkharel.com.np/banner/fsu-banner.png" alt="Pulchowk Campus Banner" class="header-banner" width="600" height="120">
+        </div>
+        <div class="content">
+            <center>
+                <h2 style="color: #4CAF50;">Congratulations!</h2>
+                <p>Your club <strong>${club.name}</strong> is now official.</p>
+            </center>
+            
+            <div class="details-box">
+                <div class="details-row"><strong>Club Name:</strong> ${club.name}</div>
+                <div class="details-row"><strong>Category:</strong> ${club.category.charAt(0).toUpperCase() + club.category.slice(1)}</div>
+                <div class="details-row"><strong>Role:</strong> President</div>
+                <div class="details-row"><strong>Status:</strong> <span style="color: #4CAF50; font-weight: bold;">Active</span></div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <h3 style="color: #333;">🎯 What's Next?</h3>
+                <ul style="line-height: 1.6; padding-left: 20px;">
+                    <li><strong>Manage Your Channels:</strong> Text and voice channels have been created.</li>
+                    <li><strong>Recruit Members:</strong> Invite students to join your club.</li>
+                    <li><strong>Host Events:</strong> Use <code>/createevent</code> to organize activities.</li>
+                </ul>
+            </div>
+            
+            <center>
+                <div class="button-container">
+                    <a href="https://discord.gg/YaQxWnqJVx" class="button">🚀 Go to Club Channel</a>
+                </div>
+            </center>
+        </div>
+        <div class="footer">
+            <p>&copy; 2025 FSU Bot. All rights reserved.</p>
+            <p>You received this email because you are the president of a registered club.</p>
+        </div>
+    </div>
+</body>
+</html>
+                        `;
+
+                        // REMOVED EMOJI from subject to fix encoding issues
+                        await emailSvc.sendEmail(
+                            presidentEmail,
+                            `Club Approved: ${club.name}`,
+                            emailHtml
+                        );
+                        log('Sent approval email to club president', 'club', { email: presidentEmail });
+                    }
+                } catch (emailError) {
+                    log('Error sending approval email', 'club', null, emailError, 'warn');
+                }
 
                 // Post welcome message in club channel
                 const channelWelcome = new EmbedBuilder()

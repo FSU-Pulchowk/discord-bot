@@ -1,6 +1,6 @@
 // src/commands/slash/registerclub.js
-import { 
-    SlashCommandBuilder, 
+import {
+    SlashCommandBuilder,
     PermissionFlagsBits,
     ModalBuilder,
     TextInputBuilder,
@@ -72,7 +72,7 @@ export async function execute(interaction) {
             .setCustomId('club_email')
             .setLabel('Club Official Email')
             .setStyle(TextInputStyle.Short)
-            .setPlaceholder('robotics@pulchowk.edu.np')
+            .setPlaceholder('robotics@pcampus.edu.np')
             .setRequired(true)
             .setMaxLength(100);
 
@@ -114,7 +114,7 @@ export async function execute(interaction) {
             await interaction.reply({
                 content: '❌ An error occurred. Please try again.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -142,8 +142,8 @@ export async function handleModalStep1(interaction) {
         // Validate category
         const validCategories = ['technical', 'cultural', 'sports', 'social_service', 'academic', 'general'];
         if (!validCategories.includes(category)) {
-            return await interaction.editReply({ 
-                content: `❌ Invalid category. Must be one of: ${validCategories.join(', ')}` 
+            return await interaction.editReply({
+                content: `❌ Invalid category. Must be one of: ${validCategories.join(', ')}`
             });
         }
 
@@ -183,9 +183,9 @@ export async function handleModalStep1(interaction) {
             tempData,
             expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
         };
-        
+
         otpStore.set(clubEmail, otpData);
-        
+
         // Auto cleanup after 11 minutes
         setTimeout(() => {
             otpStore.delete(clubEmail);
@@ -196,7 +196,7 @@ export async function handleModalStep1(interaction) {
             const emailContent = generateEmailContent(clubName, category, clubEmail, otp);
 
             await mailer.sendEmail(clubEmail, `Verify Club Registration - OTP: ${otp}`, emailContent);
-            
+
             log('Email sent to ' + clubEmail + ': ' + otp, 'club', null, null, 'info');
 
             // Send verification button via DM
@@ -223,21 +223,21 @@ export async function handleModalStep1(interaction) {
 
             try {
                 await interaction.user.send({ embeds: [verifyEmbed], components: [row] });
-                
+
                 await interaction.editReply({
                     content: '✅ Check your DMs! We\'ve sent you a verification button.\n\n' +
-                             `📧 An OTP has been sent to **${clubEmail}**\n` +
-                             '⏰ Valid for 10 minutes'
+                        `📧 An OTP has been sent to **${clubEmail}**\n` +
+                        '⏰ Valid for 10 minutes'
                 });
             } catch (dmError) {
                 log('Could not send DM, showing alternative', 'club', null, dmError, 'warn');
-                
+
                 // If DM fails, provide button in the reply
                 await interaction.editReply({
                     content: '✅ Verification email sent!\n\n' +
-                             `📧 An OTP has been sent to **${clubEmail}**\n` +
-                             '⏰ Valid for 10 minutes\n\n' +
-                             '**Note:** Enable DMs from server members for a better experience.',
+                        `📧 An OTP has been sent to **${clubEmail}**\n` +
+                        '⏰ Valid for 10 minutes\n\n' +
+                        '**Note:** Enable DMs from server members for a better experience.',
                     components: [row]
                 });
             }
@@ -245,24 +245,24 @@ export async function handleModalStep1(interaction) {
         } catch (error) {
             log('Error sending verification email', 'club', null, error, 'error');
             otpStore.delete(clubEmail); // Clean up on failure
-            
+
             await interaction.editReply({
                 content: '❌ Failed to send verification email. Please check the email address and try again.\n\n' +
-                         `Error: ${error.message}`
+                    `Error: ${error.message}`
             });
         }
     } catch (error) {
         log('Error in handleModalStep1', 'club', null, error, 'error');
-        
+
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: '❌ An error occurred during registration.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         } else {
             await interaction.editReply({
                 content: '❌ An error occurred during registration.'
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -308,12 +308,12 @@ export async function handleVerifyButton(interaction) {
         await interaction.showModal(modal);
     } catch (error) {
         log('Error in handleVerifyButton', 'club', null, error, 'error');
-        
+
         if (!interaction.replied) {
             await interaction.reply({
                 content: '❌ An error occurred. Please try again.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -348,17 +348,17 @@ export async function handleOTPVerification(interaction) {
         if (stored.otp !== enteredOTP) {
             return await interaction.editReply({
                 content: '❌ Invalid OTP. Please check your email and try again.\n\n' +
-                         'Click the verification button in your DM to try again.'
+                    'Click the verification button in your DM to try again.'
             });
         }
 
         // OTP verified! Clean up and store verified data
         otpStore.delete(clubEmail);
-        
+
         // Store verified data with a unique key
         const verificationKey = `${interaction.user.id}_${Date.now()}`;
         verifiedClubDataStore.set(verificationKey, stored.tempData);
-        
+
         // Auto cleanup after 15 minutes
         setTimeout(() => {
             verifiedClubDataStore.delete(verificationKey);
@@ -399,16 +399,16 @@ export async function handleOTPVerification(interaction) {
 
     } catch (error) {
         log('Error in handleOTPVerification', 'club', null, error, 'error');
-        
+
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: '❌ An error occurred during verification.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         } else {
             await interaction.editReply({
                 content: '❌ An error occurred during verification.'
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -420,7 +420,7 @@ export async function handleOTPVerification(interaction) {
 export async function handleContinueRegistration(interaction) {
     try {
         const verificationKey = interaction.customId.replace('continue_registration_', '');
-        
+
         const basicData = verifiedClubDataStore.get(verificationKey);
         if (!basicData) {
             return await interaction.reply({
@@ -484,12 +484,12 @@ export async function handleContinueRegistration(interaction) {
         await interaction.showModal(modal2);
     } catch (error) {
         log('Error in handleContinueRegistration', 'club', null, error, 'error');
-        
+
         if (!interaction.replied) {
             await interaction.reply({
                 content: '❌ An error occurred. Please try again.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -500,9 +500,9 @@ export async function handleContinueRegistration(interaction) {
 export async function handleSkipAdditionalDetails(interaction) {
     try {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        
+
         const verificationKey = interaction.customId.replace('skip_additional_details_', '');
-        
+
         const basicData = verifiedClubDataStore.get(verificationKey);
         if (!basicData) {
             return await interaction.editReply({
@@ -514,16 +514,16 @@ export async function handleSkipAdditionalDetails(interaction) {
         await completeRegistration(interaction, basicData, null, verificationKey);
     } catch (error) {
         log('Error in handleSkipAdditionalDetails', 'club', null, error, 'error');
-        
+
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: '❌ An error occurred.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         } else {
             await interaction.editReply({
                 content: '❌ An error occurred.'
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -568,16 +568,16 @@ export async function handleModalStep2(interaction) {
         await completeRegistration(interaction, basicData, additionalData, verificationKey);
     } catch (error) {
         log('Error in handleModalStep2', 'club', null, error, 'error');
-        
+
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: '❌ An error occurred during registration.',
                 flags: MessageFlags.Ephemeral
-            }).catch(() => {});
+            }).catch(() => { });
         } else {
             await interaction.editReply({
                 content: '❌ An error occurred during registration.'
-            }).catch(() => {});
+            }).catch(() => { });
         }
     }
 }
@@ -648,12 +648,12 @@ async function completeRegistration(interaction, basicData, additionalData, veri
                     advisor_name, max_members, status, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
                 [
-                    basicData.guildId, basicData.clubName, slug, basicData.description, 
+                    basicData.guildId, basicData.clubName, slug, basicData.description,
                     basicData.logoUrl, basicData.userId, basicData.category,
                     basicData.clubEmail, contactPhone, websiteUrl, socialMedia,
                     advisorName, maxMembers, Date.now()
                 ],
-                function(err) {
+                function (err) {
                     if (err) reject(err);
                     else resolve(this.lastID);
                 }
@@ -667,9 +667,9 @@ async function completeRegistration(interaction, basicData, additionalData, veri
                  VALUES (?, 'club_registration', ?, ?, ?)`,
                 [
                     basicData.guildId, basicData.userId, clubId.toString(),
-                    JSON.stringify({ 
+                    JSON.stringify({
                         clubName: basicData.clubName, slug, category: basicData.category,
-                        emailVerified: true, hasAdvisor: !!advisorName, 
+                        emailVerified: true, hasAdvisor: !!advisorName,
                         hasMaxMembers: !!maxMembers, hasMeetingSchedule: !!(meetingDay || meetingTime)
                     })
                 ],
@@ -704,7 +704,7 @@ async function completeRegistration(interaction, basicData, additionalData, veri
 
         confirmEmbed.addFields({
             name: '📋 Next Steps',
-            value: 
+            value:
                 '✅ Email verified successfully\n' +
                 '⏳ Awaiting admin approval (24-48h)\n' +
                 '📱 You\'ll be notified via DM\n' +
@@ -727,7 +727,7 @@ async function completeRegistration(interaction, basicData, additionalData, veri
  */
 async function sendToApprovalChannel(interaction, clubId, basicData, slug, additionalData) {
     const EVENT_APPROVAL_CHANNEL_ID = process.env.EVENT_APPROVAL_CHANNEL_ID;
-    
+
     if (!EVENT_APPROVAL_CHANNEL_ID || EVENT_APPROVAL_CHANNEL_ID === 'YOUR_EVENT_APPROVAL_CHANNEL_ID') {
         log('EVENT_APPROVAL_CHANNEL_ID not configured, skipping approval message', 'club', null, null, 'warn');
         return;
@@ -736,14 +736,14 @@ async function sendToApprovalChannel(interaction, clubId, basicData, slug, addit
     try {
         // Get guild from client instead of interaction (in case interaction is in DM)
         const guild = interaction.guild || interaction.client.guilds.cache.get(basicData.guildId);
-        
+
         if (!guild) {
             log('Could not find guild for approval channel', 'club', { guildId: basicData.guildId }, null, 'error');
             return;
         }
 
         const approvalChannel = await guild.channels.fetch(EVENT_APPROVAL_CHANNEL_ID);
-        
+
         if (!approvalChannel) {
             log('Approval channel not found', 'club', { channelId: EVENT_APPROVAL_CHANNEL_ID }, null, 'error');
             return;
@@ -773,14 +773,14 @@ async function sendToApprovalChannel(interaction, clubId, basicData, slug, addit
 
         if (additionalData?.meetingData?.day) {
             const meetingInfo = `${additionalData.meetingData.day}s at ${additionalData.meetingData.time || 'TBA'}\n` +
-                               `Location: ${additionalData.meetingData.location || 'TBA'}\n` +
-                               `Frequency: ${additionalData.meetingData.frequency || 'Weekly'}`;
+                `Location: ${additionalData.meetingData.location || 'TBA'}\n` +
+                `Frequency: ${additionalData.meetingData.frequency || 'Weekly'}`;
             approvalEmbed.addFields({ name: '📅 Meeting Schedule', value: meetingInfo, inline: false });
         }
 
         if (additionalData?.clubVision) {
-            const visionText = additionalData.clubVision.length > 500 
-                ? additionalData.clubVision.substring(0, 497) + '...' 
+            const visionText = additionalData.clubVision.length > 500
+                ? additionalData.clubVision.substring(0, 497) + '...'
                 : additionalData.clubVision;
             approvalEmbed.addFields({ name: '🎯 Vision & Goals', value: visionText, inline: false });
         }
@@ -790,7 +790,7 @@ async function sendToApprovalChannel(interaction, clubId, basicData, slug, addit
             if (additionalData.parsedContact.phone) contactParts.push(`📞 ${additionalData.parsedContact.phone}`);
             if (additionalData.parsedContact.website) contactParts.push(`🌐 ${additionalData.parsedContact.website}`);
             if (additionalData.parsedContact.social) contactParts.push(`📱 ${additionalData.parsedContact.social}`);
-            
+
             if (contactParts.length > 0) {
                 approvalEmbed.addFields({ name: '📞 Contact Information', value: contactParts.join('\n'), inline: false });
             }
@@ -822,7 +822,7 @@ async function sendToApprovalChannel(interaction, clubId, basicData, slug, addit
         const row = new ActionRowBuilder().addComponents(approveBtn, rejectBtn);
 
         await approvalChannel.send({ embeds: [approvalEmbed], components: [row] });
-        
+
         log('Approval message sent successfully', 'club', { clubId, channelId: EVENT_APPROVAL_CHANNEL_ID }, null, 'success');
 
     } catch (error) {
@@ -994,19 +994,19 @@ function parseContactInfo(contactText) {
     const lines = contactText.split('\n');
     for (const line of lines) {
         const trimmed = line.trim();
-        
+
         if (trimmed.toLowerCase().includes('phone:')) {
             result.phone = trimmed.split(':')[1]?.trim();
         } else if (/^[\d\s\+\-\(\)]+$/.test(trimmed) && trimmed.length >= 7) {
             result.phone = trimmed;
         }
-        
+
         if (trimmed.toLowerCase().includes('website:')) {
             result.website = trimmed.split(':')[1]?.trim();
         } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
             result.website = trimmed;
         }
-        
+
         if (trimmed.toLowerCase().includes('social') || trimmed.includes('@')) {
             result.social = trimmed.split(':')[1]?.trim() || trimmed;
         }
@@ -1021,7 +1021,7 @@ function parseMeetingSchedule(scheduleText) {
     const lines = scheduleText.split('\n');
     for (const line of lines) {
         const lower = line.toLowerCase();
-        
+
         if (lower.includes('day:')) {
             result.day = line.split(':')[1]?.trim();
         } else if (lower.includes('time:')) {

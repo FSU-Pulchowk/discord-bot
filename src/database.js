@@ -50,6 +50,9 @@ async function initializeDatabase() {
                 createClubEventsTableWithMigration();
                 createEventParticipantsTable();
                 ensureEventParticipantsColumns();
+                createEventRegistrationsTable();
+                createEventEligibilityRolesTable();
+                migrateClubEventsVisibilityColumns();
                 createClubAnnouncementsTable();
                 createClubAuditLogTable();
                 createClubResourcesTable();
@@ -378,7 +381,8 @@ function createClubsTable() {
         { name: "created_at", type: "INTEGER", defaultValue: "(strftime('%s', 'now'))" },
         { name: "updated_at", type: "INTEGER", defaultValue: "(strftime('%s', 'now'))" },
         { name: "approved_at", type: "INTEGER", defaultValue: "NULL" },
-        { name: "approved_by", type: "TEXT", defaultValue: "NULL" }
+        { name: "approved_by", type: "TEXT", defaultValue: "NULL" },
+        { name: "private_event_channel_id", type: "TEXT", defaultValue: "NULL" }
     ]);
 
     // Generate slugs for existing clubs
@@ -857,6 +861,80 @@ function ensureEventParticipantsColumns() {
                 db.run(alterSQL, (err) => {
                     if (err && !err.message.includes('duplicate')) {
                         log(`Error adding ${col.name} column:`, 'error', null, err, 'error');
+                    }
+                });
+            }
+        });
+    });
+}
+
+/**
+ * Create event_registrations table for payment tracking
+ */
+function createEventRegistrationsTable() {
+    db.run(`CREATE TABLE IF NOT EXISTS event_registrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        payment_proof_url TEXT,
+        payment_status TEXT DEFAULT 'pending',
+        payment_verified_by TEXT,
+        payment_verified_at INTEGER,
+        registration_notes TEXT,
+        created_at INTEGER DEFAULT (strftime('%s', 'now')),
+        updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+        FOREIGN KEY (event_id) REFERENCES club_events(id) ON DELETE CASCADE,
+        UNIQUE(event_id, user_id),
+        CHECK(payment_status IN ('pending', 'verified', 'rejected'))
+    )`, (err) => {
+        if (err) log('Error creating event_registrations:', 'error', null, err, 'error');
+        else log('✓ event_registrations', 'init');
+    });
+}
+
+/**
+ * Create event_eligibility_roles table for role-based event access control
+ */
+function createEventEligibilityRolesTable() {
+    db.run(`CREATE TABLE IF NOT EXISTS event_eligibility_roles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id INTEGER NOT NULL,
+        role_id TEXT NOT NULL,
+        role_type TEXT NOT NULL,
+        created_at INTEGER DEFAULT (strftime('%s', 'now')),
+        FOREIGN KEY (event_id) REFERENCES club_events(id) ON DELETE CASCADE,
+        CHECK(role_type IN ('faculty', 'batch', 'verified', 'guest', 'custom'))
+    )`, (err) => {
+        if (err) log('Error creating event_eligibility_roles:', 'error', null, err, 'error');
+        else log('✓ event_eligibility_roles', 'init');
+    });
+}
+
+/**
+ * Migrate club_events table to add visibility and private channel columns
+ */
+function migrateClubEventsVisibilityColumns() {
+    const columns = [
+        { name: "event_visibility", type: "TEXT", defaultValue: "'public'" },
+        { name: "private_channel_id", type: "TEXT", defaultValue: "NULL" }
+    ];
+
+    db.all("PRAGMA table_info(club_events)", (err, existingColumns) => {
+        if (err) {
+            log('Error checking club_events schema:', 'error', null, err, 'error');
+            return;
+        }
+
+        const columnNames = existingColumns ? existingColumns.map(col => col.name) : [];
+
+        columns.forEach(col => {
+            if (!columnNames.includes(col.name)) {
+                db.run(`ALTER TABLE club_events ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`, (err) => {
+                    if (err && !err.message.includes('duplicate')) {
+                        log(`Error adding ${col.name} column:`, 'error', null, err, 'error');
+                    } else {
+                        log(`✅ Added ${col.name} column to club_events`, 'init', null, null, 'success');
                     }
                 });
             }

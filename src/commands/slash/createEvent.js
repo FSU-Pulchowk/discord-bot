@@ -1,5 +1,5 @@
 // src/commands/slash/createEvent.js
-import { 
+import {
     SlashCommandBuilder,
     ModalBuilder,
     TextInputBuilder,
@@ -14,6 +14,7 @@ import {
 import { db, getClubByIdentifier } from '../../database.js';
 import { log } from '../../utils/debug.js';
 import { checkClubPermission } from '../../utils/clubPermissions.js';
+import { postEventToChannel } from '../../utils/channelManager.js';
 
 global.eventPosterData = global.eventPosterData || new Map();
 
@@ -24,10 +25,19 @@ export const data = new SlashCommandBuilder()
         option.setName('club')
             .setDescription('Your club name or slug')
             .setRequired(true)
-            .setAutocomplete(true));
+            .setAutocomplete(true))
+    .addStringOption(option =>
+        option.setName('visibility')
+            .setDescription('Event visibility level')
+            .setRequired(false)
+            .addChoices(
+                { name: 'Public (visible to all server members)', value: 'public' },
+                { name: 'Private (club members only)', value: 'private' }
+            ));
 
 export async function execute(interaction) {
     const clubIdentifier = interaction.options.getString('club');
+    const eventVisibility = interaction.options.getString('visibility') || 'public';
     const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID || 'YOUR_VERIFIED_ROLE_ID';
 
     try {
@@ -120,6 +130,10 @@ export async function execute(interaction) {
             new ActionRowBuilder().addComponents(typeInput)
         );
 
+        // Store event visibility from command option for later use
+        global.eventPosterData = global.eventPosterData || new Map();
+        global.eventPosterData.set(interaction.user.id, { eventVisibility, createdAt: Date.now() });
+
         await interaction.showModal(modal);
 
     } catch (error) {
@@ -127,7 +141,7 @@ export async function execute(interaction) {
         await interaction.reply({
             content: '❌ An error occurred. Please try again.',
             flags: MessageFlags.Ephemeral
-        }).catch(() => {});
+        }).catch(() => { });
     }
 }
 
@@ -146,6 +160,10 @@ export async function handleCreateEventModalStep1(interaction) {
     const dateTimeStr = interaction.fields.getTextInputValue('event_datetime');
     const venue = interaction.fields.getTextInputValue('event_venue');
     const eventType = interaction.fields.getTextInputValue('event_type').toLowerCase();
+
+    // Get event visibility from stored data (set during command execution)
+    const storedData = global.eventPosterData.get(interaction.user.id);
+    const eventVisibility = storedData?.eventVisibility || 'public';
 
     // Quick validation (synchronous only - no DB queries)
     const dateTimeMatch = dateTimeStr.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})$/);
@@ -233,7 +251,7 @@ export async function handleCreateEventModalStep1(interaction) {
 
     // Store basic data immediately (before DB query)
     global.eventPosterData.set(interaction.user.id, {
-        clubId, club: null, title, description, eventDate, startTime, venue, eventType,
+        clubId, club: null, title, description, eventDate, startTime, venue, eventType, eventVisibility,
         createdAt: Date.now()
     });
 
@@ -291,14 +309,13 @@ export async function handleCreateEventModalStep1(interaction) {
  * Handle continue button to show step 2 modal
  */
 export async function handleContinueEventStep2(interaction) {
-    await interaction.deferUpdate();
-
+    // Don't defer - we need to show a modal, which requires the interaction to not be deferred
     const userId = interaction.user.id;
     const basicData = global.eventPosterData.get(userId);
-    
+
     if (!basicData || Date.now() - basicData.createdAt > 10 * 60 * 1000) {
         global.eventPosterData.delete(userId);
-        return await interaction.followUp({
+        return await interaction.reply({
             content: '❌ Session expired. Please start creating the event again.',
             ephemeral: true
         });
@@ -320,7 +337,7 @@ export async function handleContinueEventStep2(interaction) {
 
             if (!club) {
                 global.eventPosterData.delete(userId);
-                return await interaction.followUp({
+                return await interaction.reply({
                     content: '❌ Club not found or inactive. Please start over.',
                     ephemeral: true
                 });
@@ -330,7 +347,7 @@ export async function handleContinueEventStep2(interaction) {
             global.eventPosterData.set(userId, basicData);
         } catch (error) {
             log('Error validating club for step 2', 'club', null, error, 'error');
-            return await interaction.followUp({
+            return await interaction.reply({
                 content: '❌ Error validating club. Please try again.',
                 ephemeral: true
             });
@@ -490,11 +507,12 @@ export async function handleCreateEventModalStep2(interaction) {
             { name: '🎯 Event', value: basicData.title, inline: true },
             { name: '🏛️ Club', value: basicData.club.name, inline: true },
             { name: '📅 Date', value: `${basicData.eventDate} at ${basicData.startTime}`, inline: true },
-            { name: '📋 Instructions', value: 
-                '1. Click "Upload Poster" button below\n' +
-                '2. Select your event poster (image file)\n' +
-                '3. Or click "Skip Poster" to create without one\n\n' +
-                '**Recommended:** JPG or PNG, max 8MB'
+            {
+                name: '📋 Instructions', value:
+                    '1. Click "Upload Poster" button below\n' +
+                    '2. Select your event poster (image file)\n' +
+                    '3. Or click "Skip Poster" to create without one\n\n' +
+                    '**Recommended:** JPG or PNG, max 8MB'
             }
         )
         .setFooter({ text: 'Posters make your event more attractive!' })
@@ -536,7 +554,7 @@ export async function handleUploadPosterButton(interaction) {
 
     try {
         await interaction.user.send({ embeds: [uploadInstructionsEmbed] });
-        
+
         await interaction.followUp({
             content: '✅ Check your DMs! Send your poster image there.',
             ephemeral: true
@@ -549,7 +567,7 @@ export async function handleUploadPosterButton(interaction) {
 
         collector.on('collect', async (message) => {
             const attachment = message.attachments.first();
-            
+
             if (!attachment.contentType?.startsWith('image/')) {
                 await message.reply('❌ Please send an image file (JPG, PNG, or GIF).');
                 return;
@@ -570,7 +588,7 @@ export async function handleUploadPosterButton(interaction) {
 
         collector.on('end', (collected, reason) => {
             if (reason === 'time' && collected.size === 0) {
-                interaction.user.send('⏰ Poster upload timed out. Creating event without poster...').catch(() => {});
+                interaction.user.send('⏰ Poster upload timed out. Creating event without poster...').catch(() => { });
                 const basicData = global.eventPosterData.get(interaction.user.id);
                 if (basicData) {
                     finalizeEventCreation(interaction, basicData);
@@ -620,7 +638,7 @@ async function finalizeEventCreation(interaction, eventData) {
             global.eventPosterData.delete(interaction.user.id);
             return await interaction.user.send({
                 content: `❌ Permission check failed: ${permissionCheck.reason}`
-            }).catch(() => {});
+            }).catch(() => { });
         }
 
         // Check if approval required
@@ -646,19 +664,19 @@ async function finalizeEventCreation(interaction, eventData) {
                     venue, location_type, event_type, max_participants, min_participants,
                     registration_required, registration_deadline, registration_fee,
                     external_form_url, meeting_link, eligibility_criteria, poster_url,
-                    status, created_by, visibility
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'club')`,
+                    status, created_by, visibility, event_visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'club', ?)`,
                 [
-                    eventData.clubId, eventData.club.guild_id, eventData.title, 
+                    eventData.clubId, eventData.club.guild_id, eventData.title,
                     eventData.description, eventData.eventDate, eventData.startTime,
                     eventData.venue, eventData.locationType, eventData.eventType,
                     eventData.maxParticipants, eventData.minParticipants,
                     eventData.registrationRequired ? 1 : 0, eventData.registrationDeadline,
                     eventData.registrationFee, eventData.externalFormUrl, eventData.meetingLink,
                     JSON.stringify(eventData.eligibilityCriteria), eventData.posterUrl,
-                    status, interaction.user.id
+                    status, interaction.user.id, eventData.eventVisibility || 'public'
                 ],
-                function(err) {
+                function (err) {
                     if (err) reject(err);
                     else resolve(this.lastID);
                 }
@@ -690,6 +708,67 @@ async function finalizeEventCreation(interaction, eventData) {
 
         if (requireApproval) {
             await sendForApproval(interaction, eventId, eventData);
+        } else {
+            // Post event immediately if no approval required
+            try {
+                // Create event embed for posting
+                const eventEmbed = new EmbedBuilder()
+                    .setColor(eventData.club.primary_color || '#5865F2')
+                    .setTitle(eventData.title)
+                    .setDescription(eventData.description)
+                    .addFields(
+                        { name: '📅 Date & Time', value: `${eventData.eventDate} at ${eventData.startTime}`, inline: true },
+                        { name: '📍 Venue', value: eventData.venue, inline: true },
+                        { name: '🎯 Type', value: eventData.eventType, inline: true },
+                        { name: '🏛️ Club', value: eventData.club.name, inline: true }
+                    )
+                    .setFooter({ text: `Event ID: ${eventId}` })
+                    .setTimestamp();
+
+                if (eventData.posterUrl) {
+                    eventEmbed.setImage(eventData.posterUrl);
+                }
+
+                // Create join button
+                const joinButton = new ButtonBuilder()
+                    .setCustomId(`join_event_${eventId}`)
+                    .setLabel('Register for Event')
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('📝');
+
+                const row = new ActionRowBuilder().addComponents(joinButton);
+
+                // Post to appropriate channel using channelManager
+                const message = await postEventToChannel(
+                    { ...eventData, id: eventId, event_visibility: eventData.eventVisibility || 'public' },
+                    eventData.club,
+                    interaction.guild,
+                    eventEmbed,
+                    row
+                );
+
+                // Update event with message_id and channel_id
+                await new Promise((resolve, reject) => {
+                    db.run(
+                        `UPDATE club_events SET message_id = ?, private_channel_id = ? WHERE id = ?`,
+                        [message.id, message.channel.id, eventId],
+                        (err) => {
+                            if (err) reject(err);
+                            else resolve();
+                        }
+                    );
+                });
+
+                log(`Event posted to ${eventData.eventVisibility || 'public'} channel`, 'event', {
+                    eventId,
+                    channelId: message.channel.id,
+                    messageId: message.id
+                }, null, 'success');
+
+            } catch (error) {
+                log('Error posting event to channel', 'event', { eventId }, error, 'error');
+                // Event is created but not posted - can be posted manually later
+            }
         }
 
         // Helper function to truncate strings safely
@@ -722,15 +801,15 @@ async function finalizeEventCreation(interaction, eventData) {
             successEmbed.addFields({ name: '📸 Poster', value: '✅ Uploaded', inline: true });
         }
 
-        await interaction.user.send({ embeds: [successEmbed] }).catch(() => {});
+        await interaction.user.send({ embeds: [successEmbed] }).catch(() => { });
 
         // Also send to original channel if possible
         try {
             const originalMessage = await interaction.fetchReply();
-            await originalMessage.edit({ 
+            await originalMessage.edit({
                 content: null,
-                embeds: [successEmbed], 
-                components: [] 
+                embeds: [successEmbed],
+                components: []
             });
         } catch (e) {
             // Ignore if can't edit
@@ -741,7 +820,7 @@ async function finalizeEventCreation(interaction, eventData) {
         global.eventPosterData.delete(interaction.user.id);
         await interaction.user.send({
             content: `❌ An error occurred: ${error.message}`
-        }).catch(() => {});
+        }).catch(() => { });
     }
 }
 
@@ -765,15 +844,15 @@ async function sendForApproval(interaction, eventId, eventData) {
 
         // Truncate description to fit Discord's 1024 character field value limit
         const descriptionText = truncateField(eventData.description, 'No description provided');
-        
+
         // Truncate venue if too long (Discord field value limit is 1024)
         const venueText = truncateField(eventData.venue, 'TBA');
 
         // Truncate title for description (Discord description limit is 4096, but we'll be safe)
         const titleText = truncateField(eventData.title, 'Untitled Event');
         // Additional truncation for description (defensive check even though truncateField returns string)
-        const titleForDescription = (titleText && typeof titleText === 'string' && titleText.length > 200) 
-            ? titleText.substring(0, 197) + '...' 
+        const titleForDescription = (titleText && typeof titleText === 'string' && titleText.length > 200)
+            ? titleText.substring(0, 197) + '...'
             : (titleText || 'Untitled Event');
 
         // Truncate club name and slug
@@ -860,17 +939,17 @@ function parseRegistrationInfo(text) {
     const lines = text.split('\n');
     for (const line of lines) {
         const lower = line.toLowerCase();
-        
+
         if (lower.includes('deadline:')) {
             result.deadline = line.split(':')[1]?.trim();
         }
-        
+
         if (lower.includes('fee:')) {
             const feeStr = line.split(':')[1]?.trim();
             const feeMatch = feeStr?.match(/\d+/);
             result.fee = feeMatch ? parseInt(feeMatch[0]) : null;
         }
-        
+
         if (lower.includes('form:') || lower.includes('external')) {
             const urlMatch = line.match(/https?:\/\/[^\s]+/);
             result.externalForm = urlMatch ? urlMatch[0] : null;
@@ -886,17 +965,17 @@ function parseEligibilityInfo(text) {
     const lines = text.split('\n');
     for (const line of lines) {
         const lower = line.toLowerCase();
-        
+
         if (lower.includes('batch:')) {
             const batchStr = line.split(':')[1]?.trim();
             result.batch = batchStr?.split(',').map(b => b.trim()) || [];
         }
-        
+
         if (lower.includes('faculty:')) {
             const facultyStr = line.split(':')[1]?.trim();
             result.faculty = facultyStr?.split(',').map(f => f.trim()) || [];
         }
-        
+
         if (lower.includes('requirements:')) {
             result.requirements = line.split(':')[1]?.trim();
         }
@@ -935,7 +1014,7 @@ export async function autocomplete(interaction) {
         for (const club of clubs) {
             if (club.name.toLowerCase().includes(focusedValue.toLowerCase()) ||
                 club.slug.toLowerCase().includes(focusedValue.toLowerCase())) {
-                
+
                 const permCheck = await checkClubPermission({
                     member: interaction.member,
                     clubId: club.id,
