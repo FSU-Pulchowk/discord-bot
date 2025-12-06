@@ -27,6 +27,7 @@ import { initializeGoogleCalendarClient } from './commands/slash/holidays.js';
 import { fromPath } from 'pdf2pic';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { NoticeProcessor } from './utils/NoticeProcessor.js';
+import { detectSpam, matchesKnownSpamPattern } from './utils/spamDetector.js';
 
 import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
@@ -1519,14 +1520,88 @@ class PulchowkBot {
     }
 
     /**
-     * Enhanced anti-spam handler.
+     * Enhanced anti-spam handler with content-based detection.
      * @private
      */
     async _handleAntiSpam(message) {
         const userId = message.author.id;
         const guildId = message.guild.id;
+        const content = message.content || '';
 
         try {
+            // First, check for content-based spam (high priority)
+            const spamCheck = detectSpam(content);
+            const isKnownSpamPattern = matchesKnownSpamPattern(content);
+
+            if (spamCheck.isSpam || isKnownSpamPattern) {
+                this.debugConfig.log('Spam detected via content analysis', 'antispam', {
+                    userId,
+                    guildId,
+                    reason: spamCheck.reason || 'Known spam pattern',
+                    severity: spamCheck.severity || 'high',
+                    messagePreview: content.substring(0, 100)
+                }, null, 'warn');
+
+                // Delete the spam message immediately
+                try {
+                    if (message.deletable && message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
+                        await message.delete();
+                    }
+                } catch (deleteError) {
+                    this.debugConfig.log('Could not delete spam message', 'antispam', { messageId: message.id }, deleteError, 'warn');
+                }
+
+                // Clean all messages from this spammer
+                await this._cleanSpammerMessages(message.member || message.author, message.guild);
+
+                // Apply punishment based on severity
+                const severity = spamCheck.severity || 'high';
+                
+                if (severity === 'high' || isKnownSpamPattern) {
+                    // Immediate ban for high-severity spam
+                    if (message.member?.bannable) {
+                        try {
+                            await message.member.ban({
+                                reason: `Anti-spam: Content-based spam detection - ${spamCheck.reason || 'Known spam pattern'}`
+                            });
+                            
+                            const logChannel = await this._getLogChannel(message.guild);
+                            if (logChannel) {
+                                const banEmbed = new EmbedBuilder()
+                                    .setColor(this.colors.error)
+                                    .setTitle('🚨 Spammer Banned')
+                                    .setDescription(`**User:** ${message.author.tag} (${message.author.id})\n**Reason:** Content-based spam detection\n**Severity:** High\n**Message Preview:** ${content.substring(0, 200)}`)
+                                    .setTimestamp();
+                                await logChannel.send({ embeds: [banEmbed] });
+                            }
+                            
+                            this.debugConfig.log(`Banned spammer: ${message.author.tag}`, 'antispam', { userId, reason: spamCheck.reason }, null, 'success');
+                        } catch (banError) {
+                            this.debugConfig.log('Could not ban spammer', 'antispam', { userId }, banError, 'error');
+                            // Fallback to timeout if ban fails
+                            if (message.member?.moderatable) {
+                                await message.member.timeout(7 * 24 * 60 * 60 * 1000, 'Anti-spam: Content-based spam (ban failed)');
+                            }
+                        }
+                    } else if (message.member?.moderatable) {
+                        // Timeout if can't ban
+                        await message.member.timeout(7 * 24 * 60 * 60 * 1000, 'Anti-spam: Content-based spam');
+                        this.debugConfig.log(`Timed out spammer (cannot ban): ${message.author.tag}`, 'antispam', { userId }, null, 'warn');
+                    }
+                } else if (severity === 'medium') {
+                    // Timeout for medium severity
+                    if (message.member?.moderatable) {
+                        await message.member.timeout(24 * 60 * 60 * 1000, 'Anti-spam: Medium severity spam');
+                        this.debugConfig.log(`Timed out spammer (medium severity): ${message.author.tag}`, 'antispam', { userId }, null, 'warn');
+                    }
+                }
+
+                // Mark user as spammer to prevent further processing
+                this.spamMap.set(userId, { isSpammer: true, detectedAt: Date.now() });
+                return; // Exit early, don't process rate-based spam
+            }
+
+            // Continue with rate-based spam detection
             const config = await new Promise((resolve) => {
                 this.client.db.get(
                     `SELECT message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold 
@@ -1546,6 +1621,11 @@ class PulchowkBot {
 
             const { message_limit, time_window_seconds, mute_duration_seconds, kick_threshold, ban_threshold } = antiSpamConfig;
 
+            // Skip if already marked as spammer
+            if (this.spamMap.has(userId) && this.spamMap.get(userId).isSpammer) {
+                return;
+            }
+
             if (!this.spamMap.has(userId)) {
                 this.spamMap.set(userId, {
                     count: 1,
@@ -1553,6 +1633,8 @@ class PulchowkBot {
                 });
             } else {
                 const userData = this.spamMap.get(userId);
+                if (userData.isSpammer) return;
+                
                 userData.count++;
                 clearTimeout(userData.timer);
                 userData.timer = setTimeout(() => this.spamMap.delete(userId), time_window_seconds * 1000);
@@ -1580,6 +1662,110 @@ class PulchowkBot {
             }
         } catch (error) {
             this.debugConfig.log('Error in anti-spam handler', 'event', { userId, guildId }, error, 'error');
+        }
+    }
+
+    /**
+     * Cleans all messages from a detected spammer across all channels.
+     * @private
+     */
+    async _cleanSpammerMessages(userOrMember, guild) {
+        const userId = userOrMember.id;
+        const member = userOrMember.member || userOrMember;
+        
+        this.debugConfig.log(`Cleaning all messages from spammer: ${userOrMember.tag || userOrMember.username}`, 'antispam', { userId, guildId: guild.id });
+
+        try {
+            let totalDeleted = 0;
+            const channelsToCheck = guild.channels.cache.filter(channel => 
+                channel.type === ChannelType.GuildText || 
+                channel.type === ChannelType.GuildAnnouncement
+            );
+
+            for (const channel of channelsToCheck.values()) {
+                if (!channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
+                    continue;
+                }
+
+                try {
+                    // Fetch messages from the spammer (up to 100 per channel)
+                    const messages = await channel.messages.fetch({ limit: 100 });
+                    const spammerMessages = messages.filter(msg => msg.author.id === userId && !msg.deleted);
+
+                    if (spammerMessages.size > 0) {
+                        // Delete in batches (Discord allows bulk delete of up to 100 messages)
+                        const messageArray = Array.from(spammerMessages.values());
+                        
+                        // Filter messages older than 14 days (Discord bulk delete limit)
+                        const twoWeeksAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
+                        const recentMessages = messageArray.filter(msg => msg.createdTimestamp > twoWeeksAgo);
+                        const oldMessages = messageArray.filter(msg => msg.createdTimestamp <= twoWeeksAgo);
+
+                        // Bulk delete recent messages
+                        if (recentMessages.length > 0) {
+                            // Discord bulk delete requires at least 2 messages
+                            if (recentMessages.length === 1) {
+                                try {
+                                    await recentMessages[0].delete();
+                                    totalDeleted++;
+                                } catch (err) {
+                                    this.debugConfig.log(`Could not delete single message in ${channel.name}`, 'antispam', null, err, 'warn');
+                                }
+                            } else {
+                                try {
+                                    await channel.bulkDelete(recentMessages, true);
+                                    totalDeleted += recentMessages.length;
+                                } catch (bulkError) {
+                                    // If bulk delete fails, try individual deletes
+                                    this.debugConfig.log(`Bulk delete failed in ${channel.name}, trying individual deletes`, 'antispam', null, bulkError, 'warn');
+                                    for (const msg of recentMessages) {
+                                        try {
+                                            await msg.delete();
+                                            totalDeleted++;
+                                        } catch (err) {
+                                            // Message might already be deleted or inaccessible
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Delete old messages individually
+                        for (const msg of oldMessages) {
+                            try {
+                                await msg.delete();
+                                totalDeleted++;
+                            } catch (err) {
+                                // Message might already be deleted or inaccessible
+                            }
+                        }
+                    }
+                } catch (channelError) {
+                    this.debugConfig.log(`Error cleaning messages in channel ${channel.name}`, 'antispam', { channelId: channel.id }, channelError, 'warn');
+                }
+            }
+
+            this.debugConfig.log(`Cleaned ${totalDeleted} messages from spammer ${userOrMember.tag || userOrMember.username}`, 'antispam', { userId, totalDeleted }, null, 'success');
+        } catch (error) {
+            this.debugConfig.log('Error cleaning spammer messages', 'antispam', { userId }, error, 'error');
+        }
+    }
+
+    /**
+     * Gets the log channel for a guild, if configured.
+     * @private
+     */
+    async _getLogChannel(guild) {
+        try {
+            // Check for a configured log channel in database or env
+            const logChannelId = process.env.LOG_CHANNEL_ID || process.env.MOD_LOG_CHANNEL_ID;
+            if (logChannelId) {
+                const channel = await guild.channels.fetch(logChannelId).catch(() => null);
+                if (channel) return channel;
+            }
+            return null;
+        } catch (error) {
+            return null;
         }
     }
 
