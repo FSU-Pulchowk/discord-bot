@@ -15,11 +15,6 @@ import {
     handlePreviewParticipants
 } from '../utils/eventHandlers.js';
 import {
-    handlePaymentProofUpload,
-    handlePaymentVerification,
-    handlePaymentRejection
-} from '../utils/eventRegistration.js';
-import {
     handleModalStep1 as handleRegisterStep1,
     handleVerifyButton,
     handleOTPVerification,
@@ -32,12 +27,8 @@ import {
     handleEmbedAnnouncementModal
 } from '../commands/slash/announce.js';
 import {
-    handleModalSubmit as handleVerifyModalSubmit
-} from '../commands/slash/verify.js';
-import {
     handleCreateEventModalStep1,
     handleCreateEventModalStep2,
-    handleContinueEventStep2,
     handleUploadPosterButton,
     handleSkipPosterButton
 } from '../commands/slash/createEvent.js';
@@ -46,12 +37,6 @@ import { handleButtonInteraction as handleVerifyStartButton } from '../commands/
 
 export async function handleInteraction(interaction) {
     try {
-        // Check if interaction is expired/invalid (happens after bot restart)
-        const isExpired = await checkInteractionExpiry(interaction);
-        if (isExpired) {
-            return; // Silently ignore expired interactions
-        }
-
         // Handle slash commands
         if (interaction.isCommand()) {
             const command = interaction.client.commands.get(interaction.commandName);
@@ -63,7 +48,18 @@ export async function handleInteraction(interaction) {
             try {
                 await command.execute(interaction);
             } catch (error) {
-                await handleCommandError(interaction, error);
+                log(`Error executing command: ${interaction.commandName}`, 'interaction', null, error, 'error');
+
+                const errorMessage = {
+                    content: '❌ There was an error executing this command!',
+                    ephemeral: true
+                };
+
+                if (interaction.deferred || interaction.replied) {
+                    await interaction.editReply(errorMessage).catch(() => { });
+                } else {
+                    await interaction.reply(errorMessage).catch(() => { });
+                }
             }
         }
 
@@ -95,40 +91,65 @@ export async function handleInteraction(interaction) {
                 if (customId === 'club_registration_modal_step1') {
                     await handleRegisterStep1(interaction);
                 }
-                else if (customId === 'club_registration_modal_step2') {
+                else if (customId.startsWith('club_registration_modal_step2_')) {
                     await handleRegisterStep2(interaction);
                 }
-                else if (customId === 'otp_verification_modal' || customId.startsWith('verify_otp_modal_')) {
+                else if (customId.startsWith('verify_otp_modal_')) {
                     await handleOTPVerification(interaction);
+                }
+
+                // ✅ FIX: Join club modals - handle BEFORE checking other patterns
+                else if (customId.startsWith('join_club_modal_')) {
+                    log('Processing join club modal', 'interaction', { customId, userId: interaction.user.id }, null, 'verbose');
+                    await handleJoinClubModal(interaction);
                 }
 
                 // Event creation modals
                 else if (customId.startsWith('create_event_modal_step1_')) {
                     await handleCreateEventModalStep1(interaction);
                 }
-                else if (customId.startsWith('create_event_modal_step2')) {
+                else if (customId === 'create_event_modal_step2') {
                     await handleCreateEventModalStep2(interaction);
                 }
 
-                // Announce modals
-                else if (customId === 'simple_announcement_modal') {
+                // Announcement modals
+                else if (customId.startsWith('announce_simple_')) {
                     await handleSimpleAnnouncementModal(interaction);
                 }
-                else if (customId === 'embed_announcement_modal') {
+                else if (customId.startsWith('announce_embed_')) {
                     await handleEmbedAnnouncementModal(interaction);
-                }
-
-                // Verify modal
-                else if (customId === 'verify_submission_modal') {
-                    await handleVerifyModalSubmit(interaction);
                 }
 
                 else {
                     log(`Unhandled modal: ${customId}`, 'interaction', null, null, 'warn');
+
+                    // ✅ FIX: Don't let unhandled modals hang
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({
+                            content: '⚠️ This form is not currently supported.',
+                            ephemeral: true
+                        }).catch(() => { });
+                    }
+                }
+            } catch (error) {
+                log(`Error handling modal: ${customId}`, 'interaction', null, error, 'error');
+
+                // ✅ FIX: Better error handling for expired interactions
+                if (error.code === 10062 || error.message?.includes('Unknown interaction')) {
+                    log('Modal interaction expired (took >3s to process)', 'interaction', { customId }, null, 'warn');
+                    return; // Can't respond to expired interaction
                 }
 
-            } catch (error) {
-                await handleModalError(interaction, customId, error);
+                if (!interaction.replied && !interaction.deferred) {
+                    await interaction.reply({
+                        content: '❌ An error occurred while processing your submission.',
+                        ephemeral: true
+                    }).catch(() => { });
+                } else {
+                    await interaction.editReply({
+                        content: '❌ An error occurred while processing your submission.'
+                    }).catch(() => { });
+                }
             }
         }
 
@@ -190,28 +211,12 @@ export async function handleInteraction(interaction) {
                     await handleSkipAdditionalDetails(interaction);
                 }
 
-                // Event creation continuation button
-                else if (customId.startsWith('continue_event_step2_')) {
-                    await handleContinueEventStep2(interaction);
-                }
-
                 // Event poster upload buttons
                 else if (customId === 'upload_event_poster') {
                     await handleUploadPosterButton(interaction);
                 }
                 else if (customId === 'skip_event_poster') {
                     await handleSkipPosterButton(interaction);
-                }
-
-                // Payment verification buttons
-                else if (customId.startsWith('upload_payment_proof_')) {
-                    await handlePaymentProofUpload(interaction);
-                }
-                else if (customId.startsWith('verify_payment_')) {
-                    await handlePaymentVerification(interaction);
-                }
-                else if (customId.startsWith('reject_payment_')) {
-                    await handlePaymentRejection(interaction);
                 }
 
                 // Presidency transfer approval buttons
@@ -231,7 +236,18 @@ export async function handleInteraction(interaction) {
                     log(`Unhandled button: ${customId}`, 'interaction', null, null, 'warn');
                 }
             } catch (error) {
-                await handleButtonError(interaction, customId, error);
+                log(`Error handling button: ${customId}`, 'interaction', null, error, 'error');
+
+                const errorMessage = {
+                    content: '❌ An error occurred while processing your action.',
+                    ephemeral: true
+                };
+
+                if (interaction.replied || interaction.deferred) {
+                    await interaction.followUp(errorMessage).catch(() => { });
+                } else {
+                    await interaction.reply(errorMessage).catch(() => { });
+                }
             }
         }
 
@@ -241,111 +257,5 @@ export async function handleInteraction(interaction) {
 
     } catch (error) {
         log('Critical error in interaction handler', 'interaction', null, error, 'error');
-    }
-}
-
-/**
- * Check if interaction has expired (e.g., after bot restart)
- */
-async function checkInteractionExpiry(interaction) {
-    // Interactions are typically invalid if they're from before bot started
-    // or the interaction token has expired (15 minutes from creation)
-    try {
-        // If bot was started recently and interaction is old, it's likely expired
-        const botUptime = process.uptime() * 1000; // Convert to milliseconds
-        const interactionAge = Date.now() - interaction.createdTimestamp;
-
-        // If interaction is older than bot uptime, it's from before restart
-        if (interactionAge > botUptime + 5000) { // 5s grace period
-            log('Ignoring expired interaction from before bot restart', 'interaction', {
-                customId: interaction.customId || interaction.commandName,
-                age: Math.floor(interactionAge / 1000) + 's',
-                uptime: Math.floor(botUptime / 1000) + 's'
-            }, null, 'warn');
-            return true;
-        }
-
-        return false;
-    } catch (error) {
-        // If we can't determine, assume it's not expired
-        return false;
-    }
-}
-
-/**
- * Handle command execution errors
- */
-async function handleCommandError(interaction, error) {
-    log(`Error executing command: ${interaction.commandName}`, 'interaction', null, error, 'error');
-
-    const errorMessage = {
-        content: '❌ There was an error executing this command!',
-        ephemeral: true
-    };
-
-    try {
-        if (interaction.deferred || interaction.replied) {
-            await interaction.editReply(errorMessage);
-        } else {
-            await interaction.reply(errorMessage);
-        }
-    } catch (replyError) {
-        // Silently fail if we can't send error message
-    }
-}
-
-/**
- * Handle modal submission errors
- */
-async function handleModalError(interaction, customId, error) {
-    // Check for "Unknown interaction" error specifically
-    if (error.message?.includes('Unknown interaction') || error.code === 10062) {
-        log('Modal interaction expired (bot was likely restarted)', 'interaction', { customId }, null, 'warn');
-        return; // Silently ignore - user will need to start fresh
-    }
-
-    log(`Error handling modal: ${customId}`, 'interaction', null, error, 'error');
-
-    const errorMessage = {
-        content: '❌ An error occurred while processing your submission. Please try again.',
-        ephemeral: true
-    };
-
-    try {
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp(errorMessage);
-        } else {
-            await interaction.reply(errorMessage);
-        }
-    } catch (replyError) {
-        // Silently fail
-    }
-}
-
-/**
- * Handle button interaction errors
- */
-async function handleButtonError(interaction, customId, error) {
-    // Check for "Unknown interaction" error specifically
-    if (error.message?.includes('Unknown interaction') || error.code === 10062) {
-        log('Button interaction expired (bot was likely restarted)', 'interaction', { customId }, null, 'warn');
-        return; // Silently ignore - buttons from before restart won't work
-    }
-
-    log(`Error handling button: ${customId}`, 'interaction', null, error, 'error');
-
-    const errorMessage = {
-        content: '❌ An error occurred while processing your action. Please try again.',
-        ephemeral: true
-    };
-
-    try {
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp(errorMessage);
-        } else {
-            await interaction.reply(errorMessage);
-        }
-    } catch (replyError) {
-        // Silently fail
     }
 }
