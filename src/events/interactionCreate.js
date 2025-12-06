@@ -33,6 +33,7 @@ import {
     handleSkipPosterButton
 } from '../commands/slash/createEvent.js';
 import { handleTransferApproval } from '../commands/slash/transferpresident.js';
+import { handleButtonInteraction as handleVerifyStartButton } from '../commands/slash/verify.js';
 
 export async function handleInteraction(interaction) {
     try {
@@ -224,6 +225,11 @@ export async function handleInteraction(interaction) {
                 }
                 else if (customId.startsWith('deny_transfer_')) {
                     await handleTransferApproval(interaction, 'deny');
+                }
+                
+                // Verification buttons
+                else if (customId.startsWith('verify_start_button_')) {
+                    await handleVerifyStartButton(interaction);
                 }
                 
                 else {

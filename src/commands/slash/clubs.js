@@ -419,7 +419,7 @@ async function handleEvents(interaction) {
             // Get RSVP count
             const rsvpCount = await new Promise((resolve, reject) => {
                 db.get(
-                    `SELECT COUNT(*) as count FROM club_event_rsvps WHERE event_id = ? AND status = 'attending'`,
+                    `SELECT COUNT(*) as count FROM event_participants WHERE event_id = ? AND rsvp_status = 'going'`,
                     [event.id],
                     (err, row) => {
                         if (err) reject(err);
@@ -429,15 +429,15 @@ async function handleEvents(interaction) {
             });
 
             const eventType = event.event_type.charAt(0).toUpperCase() + event.event_type.slice(1);
-            const attendeeInfo = event.max_attendees
-                ? `${rsvpCount}/${event.max_attendees} attending`
+            const attendeeInfo = event.max_participants
+                ? `${rsvpCount}/${event.max_participants} attending`
                 : `${rsvpCount} attending`;
 
             embed.addFields({
                 name: `${event.title} [${event.club_name}]`,
                 value: `**Type:** ${eventType}\n` +
                     `**Date:** ${event.event_date} at ${event.start_time || 'TBA'}\n` +
-                    `**Location:** ${event.location || 'TBA'}\n` +
+                    `**Location:** ${event.venue || 'TBA'}\n` +
                     `**Attendees:** ${attendeeInfo}\n` +
                     `${event.description ? `*${event.description.substring(0, 100)}...*` : ''}`,
                 inline: false

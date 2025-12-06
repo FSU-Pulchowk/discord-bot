@@ -406,7 +406,7 @@ class ClubExcelService {
             // Update RSVP attendance
             await new Promise((resolve, reject) => {
                 db.run(
-                    `UPDATE club_event_rsvps SET attended = ? WHERE event_id = ? AND user_id = ?`,
+                    `UPDATE event_participants SET checked_in = ? WHERE event_id = ? AND user_id = ?`,
                     [attended ? 1 : 0, eventId, user.user_id],
                     (err) => {
                         if (err) reject(err);
@@ -604,15 +604,15 @@ class ClubExcelService {
     async getEventsData() {
         return new Promise((resolve, reject) => {
             db.all(
-                `SELECT c.name as club_name, e.title, e.event_type, e.date, 
-                        e.start_time, e.location, e.status,
+                `SELECT c.name as club_name, e.title, e.event_type, e.event_date, 
+                        e.start_time, e.venue, e.status,
                         COUNT(r.id) as rsvp_count,
-                        SUM(CASE WHEN r.attended = 1 THEN 1 ELSE 0 END) as attended_count
+                        SUM(CASE WHEN r.checked_in = 1 THEN 1 ELSE 0 END) as attended_count
                  FROM club_events e
                  JOIN clubs c ON e.club_id = c.id
-                 LEFT JOIN club_event_rsvps r ON e.id = r.event_id
+                 LEFT JOIN event_participants r ON e.id = r.event_id
                  GROUP BY e.id
-                 ORDER BY e.date DESC`,
+                 ORDER BY e.event_date DESC`,
                 [],
                 (err, rows) => {
                     if (err) reject(err);

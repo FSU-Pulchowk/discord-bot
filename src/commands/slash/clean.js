@@ -42,6 +42,30 @@ export const data = new SlashCommandBuilder()
     .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild);
 
 export async function execute(interaction) {
+    // CRITICAL: Defer reply immediately to avoid interaction timeout (3 second limit)
+    let isDeferred = false;
+    try {
+        await interaction.deferReply({ ephemeral: true });
+        isDeferred = true;
+    } catch (deferError) {
+        // If defer fails, interaction might be expired or already responded to
+        if (deferError.code === 10062) {
+            console.error('Interaction expired before deferring in clean command');
+            return;
+        }
+        // Try to reply normally if defer fails
+        try {
+            await interaction.reply({
+                content: '⏳ Processing your request...',
+                ephemeral: true
+            });
+            isDeferred = false;
+        } catch (replyError) {
+            console.error('Failed to respond to interaction in clean command:', replyError);
+            return;
+        }
+    }
+    
     const durationInput = interaction.options.getString('duration');
     const count = interaction.options.getInteger('count');
     const targetUser = interaction.options.getUser('target_user');
@@ -50,9 +74,9 @@ export async function execute(interaction) {
 
     const durationMs = parseDuration(durationInput);
     if (!durationMs || durationMs > 14 * 24 * 60 * 60 * 1000) {
-        return interaction.reply({
-            content: '❌ Invalid duration. Use `s`, `m`, `h`, or `d` (up to 14 days). Example: `30m`, `2h`',
-            ephemeral: true
+        const errorMsg = '❌ Invalid duration. Use `s`, `m`, `h`, or `d` (up to 14 days). Example: `30m`, `2h`';
+        return interaction.editReply({ content: errorMsg }).catch(() => {
+            interaction.followUp({ content: errorMsg, ephemeral: true }).catch(() => {});
         });
     }
 
@@ -60,7 +84,6 @@ export async function execute(interaction) {
     const threshold = now - durationMs;
 
     try {
-        await interaction.deferReply({ ephemeral: true });
 
         const messages = await targetChannel.messages.fetch({ limit: 100 });
         let toDelete = messages.filter(msg =>
@@ -105,8 +128,24 @@ export async function execute(interaction) {
         await interaction.editReply({ embeds: [embed] });
     } catch (err) {
         console.error('Error during clean:', err);
-        await interaction.editReply({
-            content: '❌ Failed to clean messages. Check my permissions.',
-        });
+        try {
+            await interaction.editReply({
+                content: '❌ Failed to clean messages. Check my permissions.',
+            });
+        } catch (editErr) {
+            // If edit fails, try followUp as fallback
+            if (err.code !== 10062) { // Don't log if interaction already expired
+                console.error('Error editing reply:', editErr);
+            }
+            try {
+                await interaction.followUp({
+                    content: '❌ Failed to clean messages. Check my permissions.',
+                    ephemeral: true
+                });
+            } catch (followUpErr) {
+                // Interaction might be completely expired
+                console.error('Error sending followUp:', followUpErr);
+            }
+        }
     }
 }

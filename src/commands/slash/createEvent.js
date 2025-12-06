@@ -135,19 +135,22 @@ export async function execute(interaction) {
  * Handle step 1 modal - Basic event info
  */
 export async function handleCreateEventModalStep1(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    // CRITICAL: Modals must be responded to within 3 seconds
+    // Show modal immediately, then validate and store data
 
     const clubId = parseInt(interaction.customId.split('_')[4]);
 
+    // Get field values quickly (synchronous operation)
     const title = interaction.fields.getTextInputValue('event_title');
     const description = interaction.fields.getTextInputValue('event_description');
     const dateTimeStr = interaction.fields.getTextInputValue('event_datetime');
     const venue = interaction.fields.getTextInputValue('event_venue');
     const eventType = interaction.fields.getTextInputValue('event_type').toLowerCase();
 
-    // Validate date/time
+    // Quick validation (synchronous only - no DB queries)
     const dateTimeMatch = dateTimeStr.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})$/);
     if (!dateTimeMatch) {
+        await interaction.deferReply({ ephemeral: true });
         return await interaction.editReply({
             content: '❌ Invalid date/time format. Use: YYYY-MM-DD HH:MM\nExample: 2025-12-25 14:30'
         });
@@ -158,101 +161,241 @@ export async function handleCreateEventModalStep1(interaction) {
 
     const eventDateTime = new Date(`${eventDate}T${startTime}`);
     if (eventDateTime <= new Date()) {
+        await interaction.deferReply({ ephemeral: true });
         return await interaction.editReply({
             content: '❌ Event date must be in the future.'
         });
     }
 
-    // Validate event type
     const validTypes = ['workshop', 'seminar', 'competition', 'social', 'meeting', 'cultural', 'sports', 'other'];
     if (!validTypes.includes(eventType)) {
+        await interaction.deferReply({ ephemeral: true });
         return await interaction.editReply({
             content: `❌ Invalid event type. Must be one of: ${validTypes.join(', ')}`
         });
     }
 
-    try {
-        const club = await new Promise((resolve, reject) => {
-            db.get(
-                `SELECT * FROM clubs WHERE id = ? AND status = 'active'`,
-                [clubId],
-                (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                }
-            );
-        });
+    // Build modal immediately (before any async operations)
+    const modal2 = new ModalBuilder()
+        .setCustomId('create_event_modal_step2')
+        .setTitle('Event Details - Additional Info');
 
-        if (!club) {
-            return await interaction.editReply({
-                content: '❌ Club not found or inactive.'
+    const participantsInput = new TextInputBuilder()
+        .setCustomId('max_participants')
+        .setLabel('Max Participants (optional)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('50')
+        .setRequired(false)
+        .setMaxLength(10);
+
+    const minParticipantsInput = new TextInputBuilder()
+        .setCustomId('min_participants')
+        .setLabel('Minimum Participants')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('10')
+        .setRequired(false)
+        .setMaxLength(10);
+
+    const registrationInput = new TextInputBuilder()
+        .setCustomId('registration_info')
+        .setLabel('Registration Details')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Deadline: YYYY-MM-DD\nFee: Rs. 100\nForm: https://...')
+        .setRequired(false)
+        .setMaxLength(500);
+
+    const eligibilityInput = new TextInputBuilder()
+        .setCustomId('eligibility')
+        .setLabel('Eligibility (Batch, Faculty)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Batch: 078, 079\nFaculty: All')
+        .setRequired(false)
+        .setMaxLength(500);
+
+    const meetingLinkInput = new TextInputBuilder()
+        .setCustomId('meeting_link')
+        .setLabel('Meeting/Registration Link')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('https://meet.google.com/...')
+        .setRequired(false);
+
+    modal2.addComponents(
+        new ActionRowBuilder().addComponents(participantsInput),
+        new ActionRowBuilder().addComponents(minParticipantsInput),
+        new ActionRowBuilder().addComponents(registrationInput),
+        new ActionRowBuilder().addComponents(eligibilityInput),
+        new ActionRowBuilder().addComponents(meetingLinkInput)
+    );
+
+    // CRITICAL: After modal submission, we cannot show another modal directly
+    // Instead, defer reply and show a button to continue
+    await interaction.deferReply({ ephemeral: true });
+
+    // Store basic data immediately (before DB query)
+    global.eventPosterData.set(interaction.user.id, {
+        clubId, club: null, title, description, eventDate, startTime, venue, eventType,
+        createdAt: Date.now()
+    });
+
+    // Show follow-up message with button to continue to step 2
+    const continueEmbed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setTitle('✅ Step 1 Complete')
+        .setDescription('Please click the button below to continue with additional event details.')
+        .addFields(
+            { name: '📝 Event Title', value: title || 'N/A', inline: true },
+            { name: '📅 Date', value: `${eventDate} at ${startTime}`, inline: true },
+            { name: '📍 Venue', value: venue || 'TBA', inline: true }
+        )
+        .setFooter({ text: 'Click the button below to continue' })
+        .setTimestamp();
+
+    const continueButton = new ButtonBuilder()
+        .setCustomId(`continue_event_step2_${interaction.user.id}`)
+        .setLabel('Continue to Step 2')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('➡️');
+
+    const row = new ActionRowBuilder().addComponents(continueButton);
+
+    await interaction.editReply({ embeds: [continueEmbed], components: [row] });
+
+    // Do DB query in background to validate club
+    // This will be checked when user clicks continue button
+    (async () => {
+        try {
+            const club = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT * FROM clubs WHERE id = ? AND status = 'active'`,
+                    [clubId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+
+            // Update stored data with club info
+            const data = global.eventPosterData.get(interaction.user.id);
+            if (data) {
+                data.club = club;
+                global.eventPosterData.set(interaction.user.id, data);
+            }
+        } catch (error) {
+            log('Error fetching club in step 1 background', 'club', null, error, 'error');
+        }
+    })();
+}
+
+/**
+ * Handle continue button to show step 2 modal
+ */
+export async function handleContinueEventStep2(interaction) {
+    await interaction.deferUpdate();
+
+    const userId = interaction.user.id;
+    const basicData = global.eventPosterData.get(userId);
+    
+    if (!basicData || Date.now() - basicData.createdAt > 10 * 60 * 1000) {
+        global.eventPosterData.delete(userId);
+        return await interaction.followUp({
+            content: '❌ Session expired. Please start creating the event again.',
+            ephemeral: true
+        });
+    }
+
+    // Validate club exists
+    if (!basicData.club) {
+        try {
+            const club = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT * FROM clubs WHERE id = ? AND status = 'active'`,
+                    [basicData.clubId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+
+            if (!club) {
+                global.eventPosterData.delete(userId);
+                return await interaction.followUp({
+                    content: '❌ Club not found or inactive. Please start over.',
+                    ephemeral: true
+                });
+            }
+
+            basicData.club = club;
+            global.eventPosterData.set(userId, basicData);
+        } catch (error) {
+            log('Error validating club for step 2', 'club', null, error, 'error');
+            return await interaction.followUp({
+                content: '❌ Error validating club. Please try again.',
+                ephemeral: true
             });
         }
+    }
 
-        // Store basic data and show step 2 modal
-        global.eventPosterData.set(interaction.user.id, {
-            clubId, club, title, description, eventDate, startTime, venue, eventType,
-            createdAt: Date.now()
-        });
+    // Now show the modal (button interactions can show modals)
+    const modal2 = new ModalBuilder()
+        .setCustomId('create_event_modal_step2')
+        .setTitle('Event Details - Additional Info');
 
-        // Show step 2 modal for additional details
-        const modal2 = new ModalBuilder()
-            .setCustomId('create_event_modal_step2')
-            .setTitle('Event Details - Additional Info');
+    const participantsInput = new TextInputBuilder()
+        .setCustomId('max_participants')
+        .setLabel('Max Participants (optional)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('50')
+        .setRequired(false)
+        .setMaxLength(10);
 
-        const participantsInput = new TextInputBuilder()
-            .setCustomId('max_participants')
-            .setLabel('Max Participants (leave blank for unlimited)')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('50')
-            .setRequired(false)
-            .setMaxLength(10);
+    const minParticipantsInput = new TextInputBuilder()
+        .setCustomId('min_participants')
+        .setLabel('Minimum Participants')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('10')
+        .setRequired(false)
+        .setMaxLength(10);
 
-        const minParticipantsInput = new TextInputBuilder()
-            .setCustomId('min_participants')
-            .setLabel('Minimum Participants Required')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('10')
-            .setRequired(false)
-            .setMaxLength(10);
+    const registrationInput = new TextInputBuilder()
+        .setCustomId('registration_info')
+        .setLabel('Registration Details')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Deadline: YYYY-MM-DD\nFee: Rs. 100\nForm: https://...')
+        .setRequired(false)
+        .setMaxLength(500);
 
-        const registrationInput = new TextInputBuilder()
-            .setCustomId('registration_info')
-            .setLabel('Registration Details')
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder('Deadline: YYYY-MM-DD\nFee: Rs. 100\nExternal Form: https://forms.gle/...')
-            .setRequired(false)
-            .setMaxLength(500);
+    const eligibilityInput = new TextInputBuilder()
+        .setCustomId('eligibility')
+        .setLabel('Eligibility (Batch, Faculty)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Batch: 078, 079\nFaculty: All')
+        .setRequired(false)
+        .setMaxLength(500);
 
-        const eligibilityInput = new TextInputBuilder()
-            .setCustomId('eligibility')
-            .setLabel('Eligibility (Batch, Faculty, etc.)')
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder('Batch: 078, 079\nFaculty: All\nRequirements: Open to all')
-            .setRequired(false)
-            .setMaxLength(500);
+    const meetingLinkInput = new TextInputBuilder()
+        .setCustomId('meeting_link')
+        .setLabel('Meeting/Registration Link')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('https://meet.google.com/...')
+        .setRequired(false);
 
-        const meetingLinkInput = new TextInputBuilder()
-            .setCustomId('meeting_link')
-            .setLabel('Meeting/Registration Link (for virtual events)')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('https://meet.google.com/...')
-            .setRequired(false);
+    modal2.addComponents(
+        new ActionRowBuilder().addComponents(participantsInput),
+        new ActionRowBuilder().addComponents(minParticipantsInput),
+        new ActionRowBuilder().addComponents(registrationInput),
+        new ActionRowBuilder().addComponents(eligibilityInput),
+        new ActionRowBuilder().addComponents(meetingLinkInput)
+    );
 
-        modal2.addComponents(
-            new ActionRowBuilder().addComponents(participantsInput),
-            new ActionRowBuilder().addComponents(minParticipantsInput),
-            new ActionRowBuilder().addComponents(registrationInput),
-            new ActionRowBuilder().addComponents(eligibilityInput),
-            new ActionRowBuilder().addComponents(meetingLinkInput)
-        );
-
+    try {
         await interaction.showModal(modal2);
-
     } catch (error) {
-        log('Error in step 1', 'club', null, error, 'error');
-        await interaction.editReply({
-            content: `❌ An error occurred: ${error.message}`
+        log('Error showing step 2 modal from button', 'club', null, error, 'error');
+        await interaction.followUp({
+            content: '❌ Failed to show form. Please try again.',
+            ephemeral: true
         });
     }
 }
@@ -269,6 +412,38 @@ export async function handleCreateEventModalStep2(interaction) {
         return await interaction.editReply({
             content: '❌ Session expired. Please start creating the event again.'
         });
+    }
+
+    // Validate club exists (in case DB query failed in step 1)
+    if (!basicData.club) {
+        try {
+            const club = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT * FROM clubs WHERE id = ? AND status = 'active'`,
+                    [basicData.clubId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+
+            if (!club) {
+                global.eventPosterData.delete(interaction.user.id);
+                return await interaction.editReply({
+                    content: '❌ Club not found or inactive. Please start over.'
+                });
+            }
+
+            basicData.club = club;
+            global.eventPosterData.set(interaction.user.id, basicData);
+        } catch (error) {
+            log('Error validating club in step 2', 'club', null, error, 'error');
+            global.eventPosterData.delete(interaction.user.id);
+            return await interaction.editReply({
+                content: '❌ Error validating club. Please try again.'
+            });
+        }
     }
 
     const maxParticipantsStr = interaction.fields.getTextInputValue('max_participants') || null;
@@ -297,7 +472,7 @@ export async function handleCreateEventModalStep2(interaction) {
     global.eventPosterData.set(interaction.user.id, basicData);
 
     // Determine location type
-    const venueL = basicData.venue.toLowerCase();
+    const venueL = (basicData.venue && typeof basicData.venue === 'string') ? basicData.venue.toLowerCase() : '';
     let locationType = 'physical';
     if (venueL.includes('virtual') || venueL.includes('online')) {
         locationType = 'virtual';
@@ -517,17 +692,28 @@ async function finalizeEventCreation(interaction, eventData) {
             await sendForApproval(interaction, eventId, eventData);
         }
 
+        // Helper function to truncate strings safely
+        const truncateField = (value, fallback = 'N/A', maxLength = 1024) => {
+            if (!value || typeof value !== 'string') return fallback;
+            return value.length > maxLength ? value.substring(0, maxLength - 3) + '...' : value;
+        };
+
+        // Truncate title for description (Discord description limit is 4096, but keep it reasonable)
+        const titleText = truncateField(eventData.title, 'Untitled Event', 200);
+        const descriptionText = `**${titleText}** has been ${requireApproval ? 'submitted for approval' : 'created and is now live'}!`;
+        const safeDescription = truncateField(descriptionText, 'Event created successfully!', 4096);
+
         // Success message
         const successEmbed = new EmbedBuilder()
             .setColor('#00FF00')
             .setTitle(requireApproval ? '✅ Event Created - Pending Approval' : '✅ Event Created Successfully!')
-            .setDescription(`**${eventData.title}** has been ${requireApproval ? 'submitted for approval' : 'created and is now live'}!`)
+            .setDescription(safeDescription)
             .addFields(
                 { name: '🆔 Event ID', value: eventId.toString(), inline: true },
-                { name: '🏛️ Club', value: eventData.club.name, inline: true },
-                { name: '🔗 Slug', value: `\`${eventData.club.slug}\``, inline: true },
-                { name: '📅 Date & Time', value: `${eventData.eventDate} at ${eventData.startTime}`, inline: true },
-                { name: '📍 Venue', value: eventData.venue, inline: true },
+                { name: '🏛️ Club', value: truncateField(eventData.club?.name, 'Unknown Club'), inline: true },
+                { name: '🔗 Slug', value: `\`${truncateField(eventData.club?.slug, 'unknown')}\``, inline: true },
+                { name: '📅 Date & Time', value: truncateField(`${eventData.eventDate || 'TBA'} at ${eventData.startTime || 'TBA'}`, 'TBA'), inline: true },
+                { name: '📍 Venue', value: truncateField(eventData.venue, 'TBA'), inline: true },
                 { name: '📊 Status', value: requireApproval ? 'Pending Approval' : 'Live', inline: true }
             );
 
@@ -571,18 +757,49 @@ async function sendForApproval(interaction, eventId, eventData) {
     try {
         const approvalChannel = await interaction.guild.channels.fetch(EVENT_APPROVAL_CHANNEL_ID);
 
+        // Helper function to truncate strings to Discord's 1024 character field value limit
+        const truncateField = (value, fallback = 'N/A') => {
+            if (!value || typeof value !== 'string') return fallback;
+            return value.length > 1024 ? value.substring(0, 1021) + '...' : value;
+        };
+
+        // Truncate description to fit Discord's 1024 character field value limit
+        const descriptionText = truncateField(eventData.description, 'No description provided');
+        
+        // Truncate venue if too long (Discord field value limit is 1024)
+        const venueText = truncateField(eventData.venue, 'TBA');
+
+        // Truncate title for description (Discord description limit is 4096, but we'll be safe)
+        const titleText = truncateField(eventData.title, 'Untitled Event');
+        // Additional truncation for description (defensive check even though truncateField returns string)
+        const titleForDescription = (titleText && typeof titleText === 'string' && titleText.length > 200) 
+            ? titleText.substring(0, 197) + '...' 
+            : (titleText || 'Untitled Event');
+
+        // Truncate club name and slug
+        const clubName = truncateField(eventData.club?.name, 'Unknown Club');
+        const clubSlug = truncateField(eventData.club?.slug, 'unknown');
+
+        // Build date/time string safely
+        const dateTimeStr = `${eventData.eventDate || 'TBA'} at ${eventData.startTime || 'TBA'}`;
+        const dateTimeText = truncateField(dateTimeStr, 'TBA');
+
+        // Build type string safely
+        const typeStr = `${eventData.locationType || 'physical'} ${eventData.eventType || 'general'}`;
+        const typeText = truncateField(typeStr, 'general');
+
         const approvalEmbed = new EmbedBuilder()
             .setColor('#FFA500')
             .setTitle('📅 New Event Approval Request')
-            .setDescription(`**${eventData.title}**`)
+            .setDescription(`**${titleForDescription}**`)
             .addFields(
-                { name: '🏛️ Club', value: eventData.club.name, inline: true },
-                { name: '🔗 Slug', value: `\`${eventData.club.slug}\``, inline: true },
+                { name: '🏛️ Club', value: clubName, inline: true },
+                { name: '🔗 Slug', value: `\`${clubSlug}\``, inline: true },
                 { name: '🆔 Event ID', value: eventId.toString(), inline: true },
-                { name: '📅 Date & Time', value: `${eventData.eventDate} at ${eventData.startTime}`, inline: true },
-                { name: '📍 Venue', value: eventData.venue, inline: true },
-                { name: '🌐 Type', value: `${eventData.locationType} ${eventData.eventType}`, inline: true },
-                { name: '📝 Description', value: eventData.description.length > 1000 ? eventData.description.substring(0, 997) + '...' : eventData.description }
+                { name: '📅 Date & Time', value: dateTimeText, inline: true },
+                { name: '📍 Venue', value: venueText, inline: true },
+                { name: '🌐 Type', value: typeText, inline: true },
+                { name: '📝 Description', value: descriptionText }
             );
 
         if (eventData.maxParticipants) {
@@ -591,9 +808,15 @@ async function sendForApproval(interaction, eventId, eventData) {
 
         if (eventData.registrationRequired) {
             let regInfo = 'Required';
-            if (eventData.registrationDeadline) regInfo += `\nDeadline: ${eventData.registrationDeadline}`;
-            if (eventData.registrationFee) regInfo += `\nFee: Rs. ${eventData.registrationFee}`;
-            approvalEmbed.addFields({ name: '📝 Registration', value: regInfo, inline: true });
+            if (eventData.registrationDeadline) {
+                const deadlineText = truncateField(eventData.registrationDeadline, '');
+                if (deadlineText) regInfo += `\nDeadline: ${deadlineText}`;
+            }
+            if (eventData.registrationFee) {
+                regInfo += `\nFee: Rs. ${eventData.registrationFee}`;
+            }
+            const regInfoText = truncateField(regInfo, 'Required');
+            approvalEmbed.addFields({ name: '📝 Registration', value: regInfoText, inline: true });
         }
 
         if (eventData.posterUrl) {

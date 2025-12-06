@@ -157,7 +157,7 @@ class ClubAutomation {
             // Get RSVPs
             const rsvps = await new Promise((resolve, reject) => {
                 db.all(
-                    `SELECT user_id FROM club_event_rsvps WHERE event_id = ? AND status = 'attending'`,
+                    `SELECT user_id FROM event_participants WHERE event_id = ? AND rsvp_status = 'going'`,
                     [event.id],
                     (err, rows) => {
                         if (err) reject(err);
@@ -172,7 +172,7 @@ class ClubAutomation {
                 .setDescription(`This event is coming up in ${this.config.eventReminderHours} hours!`)
                 .addFields(
                     { name: '📅 Date & Time', value: `${event.event_date} at ${event.start_time || 'TBA'}`, inline: true },
-                    { name: '📍 Location', value: event.location || 'TBA', inline: true },
+                    { name: '📍 Location', value: event.venue || 'TBA', inline: true },
                     { name: '🏛️ Club', value: event.club_name, inline: true }
                 );
 

@@ -1557,6 +1557,9 @@ class PulchowkBot {
                 // Apply punishment based on severity
                 const severity = spamCheck.severity || 'high';
                 
+                // Assign light server ban role (view-only access)
+                await this._assignLightBanRole(message.member || message.author, message.guild);
+                
                 if (severity === 'high' || isKnownSpamPattern) {
                     // Immediate ban for high-severity spam
                     if (message.member?.bannable) {
@@ -1570,7 +1573,7 @@ class PulchowkBot {
                                 const banEmbed = new EmbedBuilder()
                                     .setColor(this.colors.error)
                                     .setTitle('🚨 Spammer Banned')
-                                    .setDescription(`**User:** ${message.author.tag} (${message.author.id})\n**Reason:** Content-based spam detection\n**Severity:** High\n**Message Preview:** ${content.substring(0, 200)}`)
+                                    .setDescription(`**User:** ${message.author.tag} (${message.author.id})\n**Reason:** Content-based spam detection\n**Severity:** High\n**Message Preview:** ${content.substring(0, 200)}\n**Light Ban Role:** Assigned`)
                                     .setTimestamp();
                                 await logChannel.send({ embeds: [banEmbed] });
                             }
@@ -1642,6 +1645,10 @@ class PulchowkBot {
                 if (userData.count > message_limit) {
                     this.spamWarnings.set(userId, (this.spamWarnings.get(userId) || 0) + 1);
                     const currentWarnings = this.spamWarnings.get(userId);
+                    
+                    // Assign light ban role for rate-based spam
+                    await this._assignLightBanRole(message.member || message.author, message.guild);
+                    
                     if (message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
                         await message.channel.bulkDelete(Math.min(userData.count, 100), true);
                     }
@@ -1671,9 +1678,11 @@ class PulchowkBot {
      */
     async _cleanSpammerMessages(userOrMember, guild) {
         const userId = userOrMember.id;
-        const member = userOrMember.member || userOrMember;
+        // Handle both User and GuildMember types
+        const user = userOrMember.user || userOrMember;
+        const userTag = user.tag || user.username || 'Unknown User';
         
-        this.debugConfig.log(`Cleaning all messages from spammer: ${userOrMember.tag || userOrMember.username}`, 'antispam', { userId, guildId: guild.id });
+        this.debugConfig.log(`Cleaning all messages from spammer: ${userTag}`, 'antispam', { userId, guildId: guild.id });
 
         try {
             let totalDeleted = 0;
@@ -1745,9 +1754,62 @@ class PulchowkBot {
                 }
             }
 
-            this.debugConfig.log(`Cleaned ${totalDeleted} messages from spammer ${userOrMember.tag || userOrMember.username}`, 'antispam', { userId, totalDeleted }, null, 'success');
+            this.debugConfig.log(`Cleaned ${totalDeleted} messages from spammer ${userTag}`, 'antispam', { userId, totalDeleted }, null, 'success');
         } catch (error) {
             this.debugConfig.log('Error cleaning spammer messages', 'antispam', { userId }, error, 'error');
+        }
+    }
+
+    /**
+     * Assigns the light server ban role to a user (view-only access).
+     * @private
+     */
+    async _assignLightBanRole(userOrMember, guild) {
+        const LIGHT_BAN_ROLE_ID = '1418234351493185657';
+        
+        try {
+            // Get member if we have a user object
+            let member = userOrMember;
+            if (userOrMember.user) {
+                member = await guild.members.fetch(userOrMember.id).catch(() => null);
+                if (!member) {
+                    this.debugConfig.log('Could not fetch member for light ban role', 'antispam', { userId: userOrMember.id }, null, 'warn');
+                    return;
+                }
+            }
+
+            if (!member || !member.roles) {
+                this.debugConfig.log('Invalid member for light ban role assignment', 'antispam', { userId: userOrMember.id }, null, 'warn');
+                return;
+            }
+
+            const lightBanRole = guild.roles.cache.get(LIGHT_BAN_ROLE_ID);
+            if (!lightBanRole) {
+                this.debugConfig.log('Light ban role not found in guild', 'antispam', { roleId: LIGHT_BAN_ROLE_ID, guildId: guild.id }, null, 'warn');
+                return;
+            }
+
+            // Check if bot can manage this role
+            if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+                this.debugConfig.log('Bot does not have permission to manage roles', 'antispam', { guildId: guild.id }, null, 'warn');
+                return;
+            }
+
+            // Check if role is higher than bot's highest role
+            if (lightBanRole.position >= guild.members.me.roles.highest.position) {
+                this.debugConfig.log('Light ban role is higher than bot\'s highest role', 'antispam', { roleId: LIGHT_BAN_ROLE_ID }, null, 'warn');
+                return;
+            }
+
+            // Assign the role if not already assigned
+            if (!member.roles.cache.has(LIGHT_BAN_ROLE_ID)) {
+                await member.roles.add(lightBanRole, 'Anti-spam: Spam detected - view-only access');
+                this.debugConfig.log(`Assigned light ban role to ${member.user.tag}`, 'antispam', { userId: member.id, roleId: LIGHT_BAN_ROLE_ID }, null, 'success');
+            } else {
+                this.debugConfig.log(`Light ban role already assigned to ${member.user.tag}`, 'antispam', { userId: member.id }, null, 'verbose');
+            }
+        } catch (error) {
+            this.debugConfig.log('Error assigning light ban role', 'antispam', { userId: userOrMember.id }, error, 'error');
         }
     }
 
