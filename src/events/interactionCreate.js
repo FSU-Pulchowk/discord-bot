@@ -48,8 +48,7 @@ import {
     handleSkipPaymentQR,
     handleEventCreationEmailModal,
     handleEventCreationOtpButton,
-    handleEventCreationOtpModal,
-    handleContinueEventStep1
+    handleEventCreationOtpModal
 } from '../commands/slash/createEvent.js';
 import { handleTransferApproval } from '../commands/slash/transferpresident.js';
 import { handleButtonInteraction as handleVerifyStartButton } from '../commands/slash/verify.js';
@@ -307,9 +306,10 @@ export async function handleInteraction(interaction) {
                     await handleEventCreationOtpButton(interaction);
                 }
 
-                // Continue to event creation step 1 button (after email verification)
+                // Continue to event creation after email verification
+                // This shows the step 1 modal (basic event info)
                 else if (customId.startsWith('continue_event_step1_')) {
-                    await handleContinueEventStep2(interaction); // Reuse existing continue handler
+                    await handleContinueEventStep2(interaction);
                 }
 
                 else {
