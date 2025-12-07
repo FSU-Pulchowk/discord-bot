@@ -1011,9 +1011,25 @@ export async function handleSkipPosterButton(interaction) {
  */
 async function finalizeEventCreation(interaction, eventData) {
     try {
+        // Get member object - may be null if called from DM (after poster upload)
+        let member = interaction.member;
+
+        if (!member && eventData.club?.guild_id) {
+            // Fetch member from guild if we're in a DM
+            try {
+                const guild = await interaction.client.guilds.fetch(eventData.club.guild_id);
+                member = await guild.members.fetch(interaction.user.id);
+            } catch (error) {
+                log('Error fetching member from guild', 'event', { userId: interaction.user.id }, error, 'error');
+                return await interaction.user.send({
+                    content: '❌ Failed to verify your permissions. Please try again.'
+                }).catch(() => { });
+            }
+        }
+
         // Re-check permission
         const permissionCheck = await checkClubPermission({
-            member: interaction.member,
+            member: member,
             clubId: eventData.clubId,
             action: 'moderate'
         });
@@ -1233,7 +1249,18 @@ async function sendForApproval(interaction, eventId, eventData) {
     }
 
     try {
-        const approvalChannel = await interaction.guild.channels.fetch(EVENT_APPROVAL_CHANNEL_ID);
+        // Get guild - may need to fetch if we're in DM context
+        let guild = interaction.guild;
+        if (!guild && eventData.club?.guild_id) {
+            guild = await interaction.client.guilds.fetch(eventData.club.guild_id);
+        }
+
+        if (!guild) {
+            log('Cannot send for approval: no guild found', 'event', { eventId }, null, 'error');
+            return;
+        }
+
+        const approvalChannel = await guild.channels.fetch(EVENT_APPROVAL_CHANNEL_ID);
 
         // Helper function to truncate strings to Discord's 1024 character field value limit
         const truncateField = (value, fallback = 'N/A') => {

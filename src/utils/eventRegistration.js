@@ -11,7 +11,8 @@ import { log } from './debug.js';
 export async function getEventPaymentInfo(eventId) {
     return new Promise((resolve, reject) => {
         db.get(
-            `SELECT id, title, registration_fee, registration_required 
+            `SELECT id, title, registration_fee, registration_required,
+                    bank_details, khalti_number, esewa_number, payment_qr_url
              FROM club_events WHERE id = ?`,
             [eventId],
             (err, row) => {
@@ -107,6 +108,25 @@ export async function initiateRegistrationWithPayment(interaction, eventId, even
  */
 async function sendPaymentInstructions(interaction, event) {
     try {
+        // Build payment methods section
+        const paymentMethods = [];
+
+        if (event.bank_details) {
+            paymentMethods.push(`**🏦 Bank Transfer:**\n${event.bank_details}`);
+        }
+
+        if (event.khalti_number) {
+            paymentMethods.push(`**📱 Khalti:**\n${event.khalti_number}`);
+        }
+
+        if (event.esewa_number) {
+            paymentMethods.push(`**💳 eSewa:**\n${event.esewa_number}`);
+        }
+
+        const paymentMethodsText = paymentMethods.length > 0
+            ? paymentMethods.join('\n\n')
+            : 'Contact event organizer for payment details';
+
         const paymentEmbed = new EmbedBuilder()
             .setColor('#FFA500')
             .setTitle('💳 Payment Required for Event Registration')
@@ -118,9 +138,14 @@ async function sendPaymentInstructions(interaction, event) {
                 { name: '🎯 Event', value: event.title, inline: true },
                 { name: '\u200b', value: '\u200b', inline: true },
                 {
+                    name: '💳 Payment Methods',
+                    value: paymentMethodsText,
+                    inline: false
+                },
+                {
                     name: '📋 Payment Instructions',
                     value:
-                        '1. Make payment via eSewa, Khalti, or Bank Transfer\n' +
+                        '1. Make payment using any of the methods above\n' +
                         '2. Take a screenshot or save the receipt (PDF/image)\n' +
                         '3. Click the button below to upload your payment proof\n' +
                         '4. Wait for admin verification (usually within 24 hours)',
@@ -138,6 +163,11 @@ async function sendPaymentInstructions(interaction, event) {
             )
             .setFooter({ text: 'Your registration will be confirmed after payment verification' })
             .setTimestamp();
+
+        // Add QR code image if available
+        if (event.payment_qr_url) {
+            paymentEmbed.setImage(event.payment_qr_url);
+        }
 
         const uploadButton = new ButtonBuilder()
             .setCustomId(`upload_payment_proof_${event.id}`)

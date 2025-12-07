@@ -74,7 +74,7 @@ export async function checkClubPermission({ member, clubId, action = 'view' }) {
         return { 
             allowed: true, 
             reason: 'Server privileged role', 
-            level: 'server_admin' 
+            level: 'Server Management' 
         };
     }
 
