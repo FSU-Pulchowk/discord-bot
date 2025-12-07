@@ -434,8 +434,8 @@ export async function handleContinueEventStep2(interaction) {
         .setCustomId('registration_info')
         .setLabel('Registration Details')
         .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder('Deadline: YYYY-MM-DD\nFee: Rs. 100\nForm: https://...')
-        .setRequired(false)
+        .setPlaceholder('Deadline*: YYYY-MM-DD\nFee: 100\nForm: https://...')
+        .setRequired(true)
         .setMaxLength(500);
 
     const eligibilityInput = new TextInputBuilder()
@@ -504,7 +504,7 @@ export async function handleContinueEventPayment(interaction) {
         .setCustomId('bank_details')
         .setLabel('Bank Account Details')
         .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder('Account Holder: John Doe\nBank: Nepal Bank\nAccount: 1234567890')
+        .setPlaceholder('Account Holder: Ramesh Sapkota\nBank: Nepal Rastra Bank\nAccount: 1234567890')
         .setRequired(false)
         .setMaxLength(300);
 
