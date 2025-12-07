@@ -177,7 +177,7 @@ export async function postEventToChannel(event, club, guild, eventEmbed, compone
             event_visibility_value: event.event_visibility,
             event_visibility_type: typeof event.event_visibility,
             full_event_keys: Object.keys(event)
-        }, null, 'warn');
+        }, 'warn');
 
         let targetChannel;
 
@@ -191,22 +191,14 @@ export async function postEventToChannel(event, club, guild, eventEmbed, compone
                 await updateClubPrivateEventChannel(club.id, targetChannel.id, db);
             }
 
-        } else if (event.event_visibility === 'public') {
-            // Post to server-wide public events channel (anyone can register)
+        } else {
+            // Post to public events channel for both 'public' and 'pulchowkian' events
+            // Both verified members and public can see events in the same channel
             const publicChannelId = process.env.PUBLIC_EVENTS_CHANNEL_ID || '1447074326963552367';
             targetChannel = await guild.channels.fetch(publicChannelId);
 
             if (!targetChannel) {
                 throw new Error(`Public events channel ${publicChannelId} not found`);
-            }
-
-        } else {
-            // Pulchowkian only or default - post to verified pulchowkian events channel
-            const pulchowkianChannelId = process.env.PULCHOWKIAN_EVENTS_CHANNEL_ID || '1364094394596069467';
-            targetChannel = await guild.channels.fetch(pulchowkianChannelId);
-
-            if (!targetChannel) {
-                throw new Error(`Pulchowkian events channel ${pulchowkianChannelId} not found`);
             }
         }
 
@@ -217,7 +209,7 @@ export async function postEventToChannel(event, club, guild, eventEmbed, compone
             visibility: event.event_visibility,
             targetChannelId: targetChannel.id,
             targetChannelName: targetChannel.name
-        }, null, 'verbose');
+        }, 'verbose');
 
         // Post the event
         const messageOptions = { embeds: [eventEmbed] };
@@ -232,7 +224,7 @@ export async function postEventToChannel(event, club, guild, eventEmbed, compone
             channelId: targetChannel.id,
             messageId: message.id,
             visibility: event.event_visibility
-        }, null, 'success');
+        }, 'success');
 
         return message;
 

@@ -13,6 +13,15 @@ export async function showNonVerifiedModal(interaction, eventId) {
         .setCustomId(`non_verified_registration_${eventId}`)
         .setTitle('Event Registration');
 
+    const nameInput = new TextInputBuilder()
+        .setCustomId('name_input')
+        .setLabel('Full Name')
+        .setPlaceholder('Your full name')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMinLength(2)
+        .setMaxLength(100);
+
     const emailInput = new TextInputBuilder()
         .setCustomId('email_input')
         .setLabel('Email Address')
@@ -31,10 +40,11 @@ export async function showNonVerifiedModal(interaction, eventId) {
         .setMinLength(10)
         .setMaxLength(15);
 
+    const nameRow = new ActionRowBuilder().addComponents(nameInput);
     const emailRow = new ActionRowBuilder().addComponents(emailInput);
     const phoneRow = new ActionRowBuilder().addComponents(phoneInput);
 
-    modal.addComponents(emailRow, phoneRow);
+    modal.addComponents(nameRow, emailRow, phoneRow);
 
     await interaction.showModal(modal);
 }
@@ -44,13 +54,22 @@ export async function showNonVerifiedModal(interaction, eventId) {
  * @param {ModalSubmitInteraction} interaction - Modal submission
  */
 export async function handleNonVerifiedModalSubmit(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    const { MessageFlags } = await import('discord.js');
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const eventId = parseInt(interaction.customId.split('_')[3]);
+    const fullName = interaction.fields.getTextInputValue('name_input').trim();
     const email = interaction.fields.getTextInputValue('email_input').trim();
     const phone = interaction.fields.getTextInputValue('phone_input').trim();
 
     try {
+        // Validate full name
+        if (fullName.length < 2) {
+            return await interaction.editReply({
+                content: '❌ **Invalid Name**\n\nPlease provide your full name (at least 2 characters).'
+            });
+        }
+
         // Validate email
         if (!validateEmail(email)) {
             return await interaction.editReply({
@@ -126,13 +145,21 @@ export async function handleNonVerifiedModalSubmit(interaction) {
             }
         }
 
-        // Register participant with non-verified data
+        // Register participant with non-verified data stored in registration_data JSON
+        const registrationData = JSON.stringify({
+            fullName: fullName,
+            email: email,
+            phoneNumber: phoneValidation.normalized,
+            isVerified: false,
+            registeredAt: Date.now()
+        });
+
         await new Promise((resolve, reject) => {
             db.run(
                 `INSERT INTO event_participants 
-                 (event_id, user_id, guild_id, rsvp_status, temp_email, phone_number, is_verified, registration_date)
-                 VALUES (?, ?, ?, 'going', ?, ?, 0, strftime('%s', 'now'))`,
-                [eventId, interaction.user.id, interaction.guild.id, email, phoneValidation.normalized, phone],
+                 (event_id, user_id, guild_id, rsvp_status, registration_data)
+                 VALUES (?, ?, ?, 'going', ?)`,
+                [eventId, interaction.user.id, interaction.guild.id, registrationData],
                 (err) => {
                     if (err) reject(err);
                     else resolve();
@@ -143,6 +170,7 @@ export async function handleNonVerifiedModalSubmit(interaction) {
         await interaction.editReply({
             content: `✅ **Registration Successful!**\n\n` +
                 `You have been registered for **${event.title}**.\n\n` +
+                `👤 Name: ${fullName}\n` +
                 `📧 Email: ${email}\n` +
                 `📱 Phone: ${phoneValidation.normalized}\n\n` +
                 `**Important:** As a non-verified user, your registration has been recorded. ` +
@@ -152,6 +180,7 @@ export async function handleNonVerifiedModalSubmit(interaction) {
         log('Non-verified user registered for event', 'event', {
             eventId,
             userId: interaction.user.id,
+            fullName,
             email,
             phone: phoneValidation.normalized
         }, null, 'success');

@@ -9,6 +9,7 @@ import { db } from '../database.js';
 import { log } from './debug.js';
 import { isServerModerator, checkClubPermission } from './clubPermissions.js';
 import { emailService } from '../services/emailService.js';
+import { postEventToChannel } from './channelManager.js';
 
 const emailSvc = new emailService();
 
@@ -183,19 +184,36 @@ export async function handleEventApproval(interaction) {
 
         const row = new ActionRowBuilder().addComponents(joinButton, previewButton);
 
-        // Post to club channel
-        const clubChannel = await interaction.guild.channels.fetch(event.club_channel_id);
-        const eventMessage = await clubChannel.send({
-            content: event.role_id ? `<@&${event.role_id}> New event announced!` : null,
-            embeds: [eventEmbed],
-            components: [row]
+        // Get club data for posting
+        const club = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT * FROM clubs WHERE id = ?`,
+                [event.club_id],
+                (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row);
+                }
+            );
         });
 
-        // Save message ID
+        if (!club) {
+            throw new Error('Club not found');
+        }
+
+        // Post to appropriate channel based on event_visibility using channelManager
+        const eventMessage = await postEventToChannel(
+            event,
+            club,
+            interaction.guild,
+            eventEmbed,
+            row
+        );
+
+        // Save message ID and channel ID
         await new Promise((resolve, reject) => {
             db.run(
-                `UPDATE club_events SET message_id = ?, updated_at = ? WHERE id = ?`,
-                [eventMessage.id, Date.now(), eventId],
+                `UPDATE club_events SET message_id = ?, private_channel_id = ?, updated_at = ? WHERE id = ?`,
+                [eventMessage.id, eventMessage.channel.id, Date.now(), eventId],
                 (err) => {
                     if (err) reject(err);
                     else resolve();
@@ -203,35 +221,12 @@ export async function handleEventApproval(interaction) {
             );
         });
 
-        // Post to public Event Announcements channel if visibility allows
-        const EVENT_ANNOUNCEMENTS_CHANNEL_ID = process.env.EVENT_ANNOUNCEMENTS_CHANNEL_ID;
-        if (EVENT_ANNOUNCEMENTS_CHANNEL_ID &&
-            EVENT_ANNOUNCEMENTS_CHANNEL_ID !== 'YOUR_EVENT_ANNOUNCEMENTS_CHANNEL_ID' &&
-            (event.visibility === 'guild' || event.visibility === 'public')) {
-            try {
-                const eventAnnouncementsChannel = await interaction.guild.channels.fetch(EVENT_ANNOUNCEMENTS_CHANNEL_ID);
-
-                const publicEventEmbed = EmbedBuilder.from(eventEmbed)
-                    .setFooter({ text: `Hosted by ${event.club_name} | Join the club to participate!` });
-
-                // Remove join button for public announcements, add info button instead
-                const infoButton = new ButtonBuilder()
-                    .setLabel('More Info')
-                    .setStyle(ButtonStyle.Link)
-                    .setURL(`https://discord.com/channels/${interaction.guild.id}/${event.club_channel_id}/${eventMessage.id}`)
-                    .setEmoji('ℹ️');
-
-                const publicRow = new ActionRowBuilder().addComponents(infoButton);
-
-                await eventAnnouncementsChannel.send({
-                    content: `🎉 **New Event: ${event.title}**`,
-                    embeds: [publicEventEmbed],
-                    components: [publicRow]
-                });
-            } catch (announceError) {
-                log('Failed to post to public event announcements channel', 'club', null, announceError, 'warn');
-            }
-        }
+        log(`Event approved and posted to ${event.event_visibility || 'club'} channel`, 'event', {
+            eventId,
+            visibility: event.event_visibility,
+            channelId: eventMessage.channel.id,
+            messageId: eventMessage.id
+        }, null, 'success');
 
         // Update approval message
         const approvedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
@@ -251,7 +246,7 @@ export async function handleEventApproval(interaction) {
                     { name: '🆔 Event ID', value: eventId.toString(), inline: true },
                     { name: '🏛️ Club', value: event.club_name, inline: true },
                     { name: '🔗 Slug', value: `\`${event.club_slug}\``, inline: true },
-                    { name: '📢 Posted in', value: `<#${event.club_channel_id}>`, inline: false },
+                    { name: '📢 Posted in', value: `<#${eventMessage.channel.id}> (${event.event_visibility || 'club'} event)`, inline: false },
                     {
                         name: '✅ Next Steps', value:
                             '• Event is now live for registrations\n' +
@@ -588,122 +583,43 @@ export async function handleJoinEventButton(interaction) {
             });
         }
 
-        // Register user (for free events)
-        await new Promise((resolve, reject) => {
-            db.run(
-                `INSERT INTO event_participants (event_id, user_id, guild_id, rsvp_status) VALUES (?, ?, ?, 'going')`,
-                [eventId, interaction.user.id, interaction.guild.id],
-                (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                }
-            );
+        // Show phone number collection modal for registration
+        const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder: ModalActionRow } = await import('discord.js');
+
+        const phoneModal = new ModalBuilder()
+            .setCustomId(`event_registration_phone_${eventId}`)
+            .setTitle('Event Registration');
+
+        const phoneInput = new TextInputBuilder()
+            .setCustomId('phone_number')
+            .setLabel('Phone Number')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('Enter your phone number (e.g., 9812345678)')
+            .setRequired(true)
+            .setMinLength(10)
+            .setMaxLength(15);
+
+        const row = new ModalActionRow().addComponents(phoneInput);
+        phoneModal.addComponents(row);
+
+        // Store event details for later use in modal handler
+        global.eventRegistrationData = global.eventRegistrationData || new Map();
+        global.eventRegistrationData.set(interaction.user.id, {
+            eventId,
+            eventTitle: event.title,
+            clubName: event.club_name,
+            eventDate: event.event_date,
+            startTime: event.start_time,
+            venue: event.venue,
+            locationType: event.location_type,
+            meetingLink: event.meeting_link,
+            participantCount: event.participant_count,
+            maxParticipants: event.max_participants,
+            minParticipants: event.min_participants,
+            clubId: event.club_id,
         });
 
-        // Update participant count in embed
-        const newCount = event.participant_count + 1;
-        try {
-            const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
-
-            // Find and update the Participants field
-            const fields = updatedEmbed.data.fields;
-            const participantFieldIndex = fields?.findIndex(f => f.name === '📊 Participants');
-            if (participantFieldIndex !== -1) {
-                const maxPart = event.max_participants || event.min_participants || 'Unlimited';
-                fields[participantFieldIndex].value = `${newCount} / ${maxPart}`;
-            }
-
-            await interaction.message.edit({ embeds: [updatedEmbed] });
-        } catch (editError) {
-            log('Failed to update event embed', 'club', null, editError, 'warn');
-        }
-
-        // Confirm to user
-        const confirmEmbed = new EmbedBuilder()
-            .setColor('#00FF00')
-            .setTitle('✅ Successfully Registered!')
-            .setDescription(`You are now registered for **${event.title}**`)
-            .addFields(
-                { name: '🏛️ Club', value: event.club_name, inline: true },
-                { name: '🔗 Slug', value: `\`${event.club_slug}\``, inline: true },
-                { name: '📅 Date & Time', value: `${event.event_date} at ${event.start_time || 'TBA'}`, inline: false }
-            );
-
-        if (event.location_type === 'virtual' && event.meeting_link) {
-            confirmEmbed.addFields({ name: '🔗 Meeting Link', value: event.meeting_link, inline: false });
-        } else if (event.venue) {
-            confirmEmbed.addFields({ name: '📍 Venue', value: event.venue, inline: false });
-        }
-
-        confirmEmbed.addFields({
-            name: '📋 What\'s Next',
-            value:
-                '• You\'ll receive reminders before the event\n' +
-                '• Check the club channel for updates\n' +
-                '• Arrive on time for attendance'
-        });
-
-        await interaction.reply({ embeds: [confirmEmbed], ephemeral: true });
-
-        // Close registration if capacity reached
-        if (event.max_participants && newCount >= event.max_participants) {
-            const closedRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                    .setCustomId(`join_event_${eventId}_closed`)
-                    .setLabel('Registration Closed')
-                    .setStyle(ButtonStyle.Secondary)
-                    .setDisabled(true)
-                    .setEmoji('🔒')
-            );
-
-            await interaction.message.edit({ components: [closedRow] });
-
-            // Notify club president
-            const club = await new Promise((resolve, reject) => {
-                db.get(
-                    `SELECT president_user_id FROM clubs WHERE id = ?`,
-                    [event.club_id],
-                    (err, row) => {
-                        if (err) reject(err);
-                        else resolve(row);
-                    }
-                );
-            });
-
-            if (club?.president_user_id) {
-                try {
-                    const president = await interaction.client.users.fetch(club.president_user_id);
-                    await president.send({
-                        content: `🎉 Event **${event.title}** has reached full capacity with ${newCount} participants!`
-                    });
-                } catch (dmError) {
-                    log('Failed to notify president', 'club', null, dmError, 'warn');
-                }
-            }
-        }
-
-        // Log action
-        await new Promise((resolve, reject) => {
-            db.run(
-                `INSERT INTO club_audit_log (guild_id, club_id, action_type, performed_by, target_id, details) 
-                 VALUES (?, ?, 'event_joined', ?, ?, ?)`,
-                [
-                    interaction.guild.id,
-                    event.club_id,
-                    interaction.user.id,
-                    eventId.toString(),
-                    JSON.stringify({
-                        eventTitle: event.title,
-                        clubName: event.club_name,
-                        clubSlug: event.club_slug
-                    })
-                ],
-                (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                }
-            );
-        });
+        await interaction.showModal(phoneModal);
 
     } catch (error) {
         log('Error joining event:', 'club', null, error, 'error');
@@ -715,10 +631,146 @@ export async function handleJoinEventButton(interaction) {
 }
 
 /**
+ * Handle event registration phone number modal submission
+ */
+export async function handleEventRegistrationPhoneModal(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const eventId = parseInt(interaction.customId.split('_')[3]);
+    const phoneNumber = interaction.fields.getTextInputValue('phone_number');
+
+    // Get stored event data
+    const storedData = global.eventRegistrationData?.get(interaction.user.id);
+    if (!storedData || storedData.eventId !== eventId) {
+        return await interaction.editReply({
+            content: '❌ Session expired. Please try registering again.'
+        });
+    }
+
+    // Clean up stored data
+    global.eventRegistrationData.delete(interaction.user.id);
+
+    try {
+        // Store registration data with phone number
+        const registrationData = JSON.stringify({
+            phoneNumber: phoneNumber,
+            registeredAt: Date.now()
+        });
+
+        // Register user in database
+        await new Promise((resolve, reject) => {
+            db.run(
+                `INSERT INTO event_participants (event_id, user_id, guild_id, rsvp_status, registration_data) 
+                 VALUES (?, ?, ?, 'going', ?)`,
+                [eventId, interaction.user.id, interaction.guild.id, registrationData],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
+        });
+
+        // Update participant count in the event message
+        const newCount = (storedData.participantCount || 0) + 1;
+        try {
+            const channel = await interaction.guild.channels.fetch(interaction.channel.id);
+            const messages = await channel.messages.fetch({ limit: 100 });
+            const eventMessage = messages.find(m =>
+                m.embeds.length > 0 &&
+                m.embeds[0].footer?.text?.includes(`Event ID: ${eventId}`)
+            );
+
+            if (eventMessage) {
+                const updatedEmbed = EmbedBuilder.from(eventMessage.embeds[0]);
+                const fields = updatedEmbed.data.fields;
+                const participantFieldIndex = fields?.findIndex(f => f.name === '📊 Participants');
+                if (participantFieldIndex !== -1) {
+                    const maxPart = storedData.maxParticipants || storedData.minParticipants || 'Unlimited';
+                    fields[participantFieldIndex].value = `${newCount} / ${maxPart}`;
+                }
+                await eventMessage.edit({ embeds: [updatedEmbed] });
+
+                // Close registration if capacity reached
+                if (storedData.maxParticipants && newCount >= storedData.maxParticipants) {
+                    const closedRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`join_event_${eventId}_closed`)
+                            .setLabel('Registration Closed')
+                            .setStyle(ButtonStyle.Secondary)
+                            .setDisabled(true)
+                            .setEmoji('🔒')
+                    );
+                    await eventMessage.edit({ components: [closedRow] });
+                }
+            }
+        } catch (updateError) {
+            log('Failed to update event embed after registration', 'event', null, updateError, 'warn');
+        }
+
+        // Send confirmation
+        const confirmEmbed = new EmbedBuilder()
+            .setColor('#00FF00')
+            .setTitle('✅ Successfully Registered!')
+            .setDescription(`You are now registered for **${storedData.eventTitle}**`)
+            .addFields(
+                { name: '🏛️ Club', value: storedData.clubName, inline: true },
+                { name: '📅 Date & Time', value: `${storedData.eventDate} at ${storedData.startTime || 'TBA'}`, inline: true },
+                { name: '📞 Phone', value: phoneNumber, inline: true }
+            );
+
+        if (storedData.locationType === 'virtual' && storedData.meetingLink) {
+            confirmEmbed.addFields({ name: '🔗 Meeting Link', value: storedData.meetingLink, inline: false });
+        } else if (storedData.venue) {
+            confirmEmbed.addFields({ name: '📍 Venue', value: storedData.venue, inline: false });
+        }
+
+        confirmEmbed.addFields({
+            name: '📋 What\'s Next',
+            value:
+                '• You\'ll receive reminders before the event\n' +
+                '• Check the club channel for updates\n' +
+                '• Arrive on time for attendance'
+        });
+
+        await interaction.editReply({ embeds: [confirmEmbed] });
+
+        // Log action
+        await new Promise((resolve, reject) => {
+            db.run(
+                `INSERT INTO club_audit_log (guild_id, club_id, action_type, performed_by, target_id, details) 
+                 VALUES (?, ?, 'event_joined', ?, ?, ?)`,
+                [
+                    interaction.guild.id,
+                    storedData.clubId,
+                    interaction.user.id,
+                    eventId.toString(),
+                    JSON.stringify({
+                        eventTitle: storedData.eventTitle,
+                        clubName: storedData.clubName,
+                        hasPhoneNumber: true
+                    })
+                ],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
+        });
+
+    } catch (error) {
+        log('Error processing event registration with phone:', 'event', null, error, 'error');
+        await interaction.editReply({
+            content: '❌ An error occurred while completing your registration. Please try again.'
+        });
+    }
+}
+
+/**
  * Handle preview participants button (Club mods and server mods can view)
  */
 export async function handlePreviewParticipants(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    const { MessageFlags } = await import('discord.js');
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const eventId = parseInt(interaction.customId.split('_')[2]);
 
@@ -726,7 +778,7 @@ export async function handlePreviewParticipants(interaction) {
         // Get event and club details
         const event = await new Promise((resolve, reject) => {
             db.get(
-                `SELECT e.*, c.president_user_id, c.name as club_name, c.slug as club_slug
+                `SELECT e.*, c.president_user_id, c.moderator_role_id, c.name as club_name, c.slug as club_slug
                  FROM club_events e
                  JOIN clubs c ON e.club_id = c.id
                  WHERE e.id = ?`,
@@ -744,16 +796,20 @@ export async function handlePreviewParticipants(interaction) {
             });
         }
 
-        // Check authorization
+        // Check authorization - Only club moderators, club president, or server admins
+        const isServerMod = isServerModerator(interaction.member);
+        const isClubPresident = event.president_user_id === interaction.user.id;
+        const isClubModerator = event.moderator_role_id && interaction.member.roles.cache.has(event.moderator_role_id);
+
         const permissionCheck = await checkClubPermission({
             member: interaction.member,
             clubId: event.club_id,
-            action: 'view'
+            action: 'moderate'  // Changed from 'view' to 'moderate' for stricter access
         });
 
-        if (!permissionCheck.allowed) {
+        if (!isServerMod && !isClubPresident && !isClubModerator && !permissionCheck.allowed) {
             return await interaction.editReply({
-                content: `❌ You don't have permission to view participants. (${permissionCheck.reason})`
+                content: `❌ You don't have permission to view participants.\n\n**Access restricted to:**\n• Server Administrators\n• Club President\n• Club Moderators\n• Server Moderators`
             });
         }
 
@@ -817,10 +873,29 @@ export async function handlePreviewParticipants(interaction) {
                 const chunk = participants.slice(i, i + chunkSize);
                 const participantList = chunk.map((p, idx) => {
                     const num = i + idx + 1;
-                    const name = p.real_name || 'Unknown';
-                    const registeredDate = new Date(p.registration_date * 1000).toLocaleDateString();
+                    let name = p.real_name || 'Unknown';
+
+                    // Parse registration_data to get phone, email, and name
+                    let email = p.email || 'N/A';
+                    let phone = 'N/A';
+
+                    if (p.registration_data) {
+                        try {
+                            const regData = JSON.parse(p.registration_data);
+                            if (regData.phoneNumber) phone = regData.phoneNumber;
+                            if (regData.email && !p.email) email = regData.email;
+                            if (regData.fullName && !p.real_name) name = regData.fullName;
+                        } catch (e) {
+                            // Invalid JSON, use defaults
+                        }
+                    }
+
+                    const registeredDate = p.registration_date
+                        ? new Date(p.registration_date * 1000).toLocaleDateString()
+                        : 'Unknown';
                     const status = p.checked_in ? '✅ Checked In' : '✅ Confirmed';
-                    return `${num}. **${name}** (<@${p.user_id}>)\n   📧 ${p.email || 'N/A'} • 📅 ${registeredDate} • ${status}`;
+
+                    return `${num}. **${name}** (<@${p.user_id}>)\n   📧 ${email} • 📞 ${phone}\n   📅 ${registeredDate} • ${status}`;
                 }).join('\n\n');
 
                 participantEmbed.addFields({

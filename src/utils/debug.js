@@ -158,7 +158,7 @@ class DebugConfig {
 		}
 		// List of sensitive keys to always redact (add more as needed)
 		const sensitivePatterns = [
-			'password', 'secret', 'token', 'key', 'api', 'auth', 'session', 'credential', 'env', 'BIRTHDAY_ANNOUNCEMENT_CHANNEL_ID'
+			'password', 'secret', 'token', 'key', 'api', 'auth', 'session', 'credential', 'env'
 		];
 		const redact = (obj) => {
 			if (typeof obj !== 'object' || obj === null) return obj;
@@ -298,11 +298,11 @@ node your_script.js -d --debug-no-sanitize          # Disable sanitization (NOT 
 
 	/**
 	 * Log a message with optional category, data, error and level.
-	 * @param {string} message
-	 * @param {string} category
-	 * @param {any} data
-	 * @param {Error} error
-	 * @param {string} level
+	 * @param {string} message - Message to log (required)
+	 * @param {string} category - Category of the log (optional)
+	 * @param {any} data - Data to log, will be sanitized (optional)	
+	 * @param {Error} error - Error to log (optional)
+	 * @param {string} level - Level of the log (optional)
 	 */
 	log(message, category = 'general', data = null, error = null, level = 'info') {
 		if (!this.enabled) return;

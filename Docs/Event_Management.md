@@ -23,11 +23,36 @@
 
     - Max Participants (optional limit)
     - Min Participants (optional)
-    - Registration Details (deadline, fee check, form URL)
+    - Registration Details (deadline, fee, form URL)
     - Eligibility Criteria (batch, faculty restrictions)
     - Meeting/Registration Link
 
-3.  **Poster Upload**
+3.  **Payment Details Modal** _(Only shown if registration fee is set)_
+
+    > **Security Note:** When you set a registration fee, you MUST provide at least one payment method. This prevents phishing scams and ensures participants have safe payment options.
+
+    Required information (provide at least ONE):
+
+    - **Bank Account Details**: Account holder name, bank name, account number
+    - **Khalti Number**: 10-digit mobile number (e.g., 9812345678)
+    - **eSewa Number**: 10-digit mobile number (e.g., 9812345678)
+    - **Payment Instructions**: Additional notes for participants (optional)
+
+    **Validation Rules:**
+
+    - ✅ At least ONE payment method required when fee > 0
+    - ✅ Khalti/eSewa numbers must be exactly 10 digits
+    - ✅ Cannot skip payment details even with external form URL
+
+4.  **Payment QR Code Upload** _(Optional but recommended)_
+
+    - Upload QR code image for easy payments
+    - Sent via DM, same as poster upload
+    - Timeout: 5 minutes
+    - Supported formats: JPG, PNG, GIF (max 8MB)
+    - Can skip and proceed to poster upload
+
+5.  **Poster Upload**
     - Upload event poster (JPG, PNG, max 8MB)
     - Or skip to continue without poster
 
@@ -54,10 +79,24 @@
 
 1.  Click **"Register for Event"** button on the event post.
 2.  If the event is **Free**, you are registered immediately.
-3.  If **Paid**, you receive a DM with payment instructions.
-    - Upload payment proof image.
-    - Wait for verification.
-4.  receive confirmation DM upon success.
+3.  If **Paid**, you receive payment details:
+    - **Payment Methods Available**: Bank Transfer, Khalti, eSewa (as provided by organizer)
+    - **Payment QR Code**: If uploaded, displayed for easy scanning
+    - **Payment Instructions**: Additional notes from organizer
+    - Upload payment proof image after making payment
+    - Wait for verification by event organizers
+4.  Receive confirmation DM upon successful verification.
+
+### Payment Methods
+
+Event organizers can provide multiple payment options:
+
+- **Bank Transfer**: Full account details (holder, bank, account number)
+- **Khalti**: 10-digit mobile number
+- **eSewa**: 10-digit mobile number
+- **QR Code**: Scannable image for quick payments
+
+> **Note:** All payment details are verified and validated during event creation to ensure participant safety.
 
 ### Organizer Experience
 

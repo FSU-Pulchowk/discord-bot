@@ -53,6 +53,7 @@ async function initializeDatabase() {
                 createEventRegistrationsTable();
                 createEventEligibilityRolesTable();
                 migrateClubEventsVisibilityColumns();
+                migrateClubEventsPaymentColumns();
                 createClubAnnouncementsTable();
                 createClubAuditLogTable();
                 createClubResourcesTable();
@@ -918,6 +919,40 @@ function migrateClubEventsVisibilityColumns() {
     const columns = [
         { name: "event_visibility", type: "TEXT", defaultValue: "'public'" },
         { name: "private_channel_id", type: "TEXT", defaultValue: "NULL" }
+    ];
+
+    db.all("PRAGMA table_info(club_events)", (err, existingColumns) => {
+        if (err) {
+            log('Error checking club_events schema:', 'error', null, err, 'error');
+            return;
+        }
+
+        const columnNames = existingColumns ? existingColumns.map(col => col.name) : [];
+
+        columns.forEach(col => {
+            if (!columnNames.includes(col.name)) {
+                db.run(`ALTER TABLE club_events ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.defaultValue}`, (err) => {
+                    if (err && !err.message.includes('duplicate')) {
+                        log(`Error adding ${col.name} column:`, 'error', null, err, 'error');
+                    } else {
+                        log(`✅ Added ${col.name} column to club_events`, 'init', null, null, 'success');
+                    }
+                });
+            }
+        });
+    });
+}
+
+/**
+ * Migrate club_events table to add payment details columns
+ */
+function migrateClubEventsPaymentColumns() {
+    const columns = [
+        { name: "bank_details", type: "TEXT", defaultValue: "NULL" },
+        { name: "payment_qr_url", type: "TEXT", defaultValue: "NULL" },
+        { name: "khalti_number", type: "TEXT", defaultValue: "NULL" },
+        { name: "esewa_number", type: "TEXT", defaultValue: "NULL" },
+        { name: "payment_instructions", type: "TEXT", defaultValue: "NULL" }
     ];
 
     db.all("PRAGMA table_info(club_events)", (err, existingColumns) => {

@@ -1,5 +1,6 @@
 // src/events/interactionCreate.js
 import { log } from '../utils/debug.js';
+import { MessageFlags } from 'discord.js';
 
 // Import all handlers
 import { handleClubApproval, handleClubRejection } from '../utils/clubApprovalHandlers.js';
@@ -12,7 +13,8 @@ import {
     handleEventApproval,
     handleEventRejection,
     handleJoinEventButton,
-    handlePreviewParticipants
+    handlePreviewParticipants,
+    handleEventRegistrationPhoneModal
 } from '../utils/eventHandlers.js';
 import {
     handlePaymentProofUpload,
@@ -37,9 +39,17 @@ import {
 import {
     handleCreateEventModalStep1,
     handleCreateEventModalStep2,
+    handleCreateEventModalPayment,
     handleContinueEventStep2,
+    handleContinueEventPayment,
     handleUploadPosterButton,
-    handleSkipPosterButton
+    handleSkipPosterButton,
+    handleUploadPaymentQR,
+    handleSkipPaymentQR,
+    handleEventCreationEmailModal,
+    handleEventCreationOtpButton,
+    handleEventCreationOtpModal,
+    handleContinueEventStep1
 } from '../commands/slash/createEvent.js';
 import { handleTransferApproval } from '../commands/slash/transferpresident.js';
 import { handleButtonInteraction as handleVerifyStartButton } from '../commands/slash/verify.js';
@@ -79,6 +89,14 @@ export async function handleInteraction(interaction) {
             try {
                 await command.autocomplete(interaction);
             } catch (error) {
+                // Silently ignore expired or failed interaction errors
+                if (error.message?.includes('Unknown interaction') ||
+                    error.message?.includes('already been acknowledged') ||
+                    error.code === 10062 ||
+                    error.code === 40060) {
+                    log(`Autocomplete interaction expired: ${interaction.commandName}`, 'interaction', null, null, 'warn');
+                    return;
+                }
                 log(`Autocomplete error: ${interaction.commandName}`, 'interaction', null, error, 'error');
             }
         }
@@ -108,6 +126,9 @@ export async function handleInteraction(interaction) {
                 }
                 else if (customId.startsWith('create_event_modal_step2')) {
                     await handleCreateEventModalStep2(interaction);
+                }
+                else if (customId === 'create_event_modal_payment') {
+                    await handleCreateEventModalPayment(interaction);
                 }
 
                 // Announce modals
@@ -144,6 +165,21 @@ export async function handleInteraction(interaction) {
                 else if (customId.startsWith('non_verified_registration_')) {
                     const { handleNonVerifiedModalSubmit } = await import('../utils/nonVerifiedRegistration.js');
                     await handleNonVerifiedModalSubmit(interaction);
+                }
+
+                // Event registration phone number modal (for verified users)
+                else if (customId.startsWith('event_registration_phone_')) {
+                    await handleEventRegistrationPhoneModal(interaction);
+                }
+
+                // Event creation email verification modal
+                else if (customId.startsWith('event_email_verify_')) {
+                    await handleEventCreationEmailModal(interaction);
+                }
+
+                // Event creation OTP verification modal
+                else if (customId === 'event_otp_modal') {
+                    await handleEventCreationOtpModal(interaction);
                 }
 
                 else {
@@ -217,6 +253,9 @@ export async function handleInteraction(interaction) {
                 else if (customId.startsWith('continue_event_step2_')) {
                     await handleContinueEventStep2(interaction);
                 }
+                else if (customId.startsWith('continue_event_payment_')) {
+                    await handleContinueEventPayment(interaction);
+                }
 
                 // Event poster upload buttons
                 else if (customId === 'upload_event_poster') {
@@ -224,6 +263,14 @@ export async function handleInteraction(interaction) {
                 }
                 else if (customId === 'skip_event_poster') {
                     await handleSkipPosterButton(interaction);
+                }
+
+                // Payment QR upload buttons
+                else if (customId.startsWith('upload_payment_qr_')) {
+                    await handleUploadPaymentQR(interaction);
+                }
+                else if (customId.startsWith('skip_payment_qr_')) {
+                    await handleSkipPaymentQR(interaction);
                 }
 
                 // Payment verification buttons
@@ -255,6 +302,15 @@ export async function handleInteraction(interaction) {
                     await handleConfirmOtpButton(interaction);
                 }
 
+                // Event creation email OTP button
+                else if (customId.startsWith('event_otp_button_')) {
+                    await handleEventCreationOtpButton(interaction);
+                }
+
+                // Continue to event creation step 1 button (after email verification)
+                else if (customId.startsWith('continue_event_step1_')) {
+                    await handleContinueEventStep2(interaction); // Reuse existing continue handler
+                }
 
                 else {
                     log(`Unhandled button: ${customId}`, 'interaction', null, null, 'warn');
@@ -309,7 +365,7 @@ async function handleCommandError(interaction, error) {
 
     const errorMessage = {
         content: '❌ There was an error executing this command!',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
     };
 
     try {
@@ -327,8 +383,11 @@ async function handleCommandError(interaction, error) {
  * Handle modal submission errors
  */
 async function handleModalError(interaction, customId, error) {
-    // Check for "Unknown interaction" error specifically
-    if (error.message?.includes('Unknown interaction') || error.code === 10062) {
+    // Check for expired or already-handled interaction errors
+    if (error.message?.includes('Unknown interaction') ||
+        error.message?.includes('already been acknowledged') ||
+        error.code === 10062 ||
+        error.code === 40060) {
         log('Modal interaction expired (bot was likely restarted)', 'interaction', { customId }, null, 'warn');
         return; // Silently ignore - user will need to start fresh
     }
@@ -337,7 +396,7 @@ async function handleModalError(interaction, customId, error) {
 
     const errorMessage = {
         content: '❌ An error occurred while processing your submission. Please try again.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
     };
 
     try {
@@ -355,8 +414,11 @@ async function handleModalError(interaction, customId, error) {
  * Handle button interaction errors
  */
 async function handleButtonError(interaction, customId, error) {
-    // Check for "Unknown interaction" error specifically
-    if (error.message?.includes('Unknown interaction') || error.code === 10062) {
+    // Check for expired or already-handled interaction errors
+    if (error.message?.includes('Unknown interaction') ||
+        error.message?.includes('already been acknowledged') ||
+        error.code === 10062 ||
+        error.code === 40060) {
         log('Button interaction expired (bot was likely restarted)', 'interaction', { customId }, null, 'warn');
         return; // Silently ignore - buttons from before restart won't work
     }
@@ -365,7 +427,7 @@ async function handleButtonError(interaction, customId, error) {
 
     const errorMessage = {
         content: '❌ An error occurred while processing your action. Please try again.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
     };
 
     try {
