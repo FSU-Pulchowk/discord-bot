@@ -36,6 +36,28 @@ export async function execute(interaction) {
             });
         }
 
+        // Check if user has required permissions for club registration
+        const MODERATOR_ROLE_ID = process.env.MODERATOR_ROLE_ID || '';
+        const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || '';
+        const CLUB_PRESIDENT_ROLE_ID = process.env.CLUB_PRESIDENT_ROLE_ID || '';
+
+        const hasModerator = MODERATOR_ROLE_ID && interaction.member.roles.cache.has(MODERATOR_ROLE_ID);
+        const hasAdmin = ADMIN_ROLE_ID && interaction.member.roles.cache.has(ADMIN_ROLE_ID);
+        const hasPresident = CLUB_PRESIDENT_ROLE_ID && interaction.member.roles.cache.has(CLUB_PRESIDENT_ROLE_ID);
+
+        if (!hasModerator && !hasAdmin && !hasPresident) {
+            return await interaction.reply({
+                content: '❌ **Unauthorized: Club Registration Restricted**\n\n' +
+                    'Club registration requires one of the following roles:\n' +
+                    '• Server Moderator\n' +
+                    '• Server Administrator\n' +
+                    '• Club President\n\n' +
+                    '*Note: You must also be verified with @Pulchowkian role.*\n\n' +
+                    'Contact server administrators if you believe you should have access.',
+                flags: MessageFlags.Ephemeral
+            });
+        }
+
         // Check if user already has a club as president
         const existingClub = await new Promise((resolve, reject) => {
             db.get(

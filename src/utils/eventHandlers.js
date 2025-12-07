@@ -486,12 +486,13 @@ export async function handleJoinEventButton(interaction) {
     const PULCHOWKIAN_ROLE_ID = process.env.VERIFIED_ROLE_ID;
 
     try {
-        // Check verification
-        if (PULCHOWKIAN_ROLE_ID && !interaction.member.roles.cache.has(PULCHOWKIAN_ROLE_ID)) {
-            return await interaction.reply({
-                content: '❌ Only verified @Pulchowkian members can join events.',
-                ephemeral: true
-            });
+        // Check if user is verified
+        const isVerified = PULCHOWKIAN_ROLE_ID && interaction.member.roles.cache.has(PULCHOWKIAN_ROLE_ID);
+
+        if (!isVerified) {
+            // Non-verified users: collect email and phone via modal
+            const { showNonVerifiedModal } = await import('./nonVerifiedRegistration.js');
+            return await showNonVerifiedModal(interaction, eventId);
         }
 
         // Check event-specific role eligibility

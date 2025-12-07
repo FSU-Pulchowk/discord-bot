@@ -933,9 +933,20 @@ class PulchowkBot {
 
         if (customId === 'confirmOtpModal') {
             const confirmOtpCmd = this.client.commands.get('confirmotp');
+            this.debugConfig.log('confirmOtpModal handler triggered', 'interaction', {
+                cmdFound: !!confirmOtpCmd,
+                hasHandleModalSubmit: confirmOtpCmd ? typeof confirmOtpCmd.handleModalSubmit === 'function' : false,
+                cmdKeys: confirmOtpCmd ? Object.keys(confirmOtpCmd) : []
+            }, null, 'verbose');
+
             if (confirmOtpCmd && typeof confirmOtpCmd.handleModalSubmit === 'function') {
                 await confirmOtpCmd.handleModalSubmit(interaction);
             } else {
+                this.debugConfig.log('confirmOtpCmd not found or missing handleModalSubmit', 'interaction', {
+                    cmdFound: !!confirmOtpCmd,
+                    cmdType: typeof confirmOtpCmd,
+                    cmdKeys: confirmOtpCmd ? Object.keys(confirmOtpCmd) : []
+                }, null, 'error');
                 await this._safeReply(interaction, {
                     content: '⚠️ OTP confirmation system temporarily unavailable.',
                     flags: MessageFlags.Ephemeral
@@ -1315,7 +1326,11 @@ class PulchowkBot {
                     .setThumbnail(userAvatar)
                     .setTimestamp();
             }
+
+            // Send welcome DM with rate limiting to avoid "opening DMs too fast" error
             try {
+                // Add delay to prevent rate limiting when multiple users join
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
                 await member.send({ embeds: [dmEmbed], components: dmComponents });
                 this.debugConfig.log(`Sent welcome DM to ${member.user.tag}`, 'event');
             } catch (dmErr) {
@@ -1556,10 +1571,10 @@ class PulchowkBot {
 
                 // Apply punishment based on severity
                 const severity = spamCheck.severity || 'high';
-                
+
                 // Assign light server ban role (view-only access)
                 await this._assignLightBanRole(message.member || message.author, message.guild);
-                
+
                 if (severity === 'high' || isKnownSpamPattern) {
                     // Immediate ban for high-severity spam
                     if (message.member?.bannable) {
@@ -1567,7 +1582,7 @@ class PulchowkBot {
                             await message.member.ban({
                                 reason: `Anti-spam: Content-based spam detection - ${spamCheck.reason || 'Known spam pattern'}`
                             });
-                            
+
                             const logChannel = await this._getLogChannel(message.guild);
                             if (logChannel) {
                                 const banEmbed = new EmbedBuilder()
@@ -1577,7 +1592,7 @@ class PulchowkBot {
                                     .setTimestamp();
                                 await logChannel.send({ embeds: [banEmbed] });
                             }
-                            
+
                             this.debugConfig.log(`Banned spammer: ${message.author.tag}`, 'antispam', { userId, reason: spamCheck.reason }, null, 'success');
                         } catch (banError) {
                             this.debugConfig.log('Could not ban spammer', 'antispam', { userId }, banError, 'error');
@@ -1637,7 +1652,7 @@ class PulchowkBot {
             } else {
                 const userData = this.spamMap.get(userId);
                 if (userData.isSpammer) return;
-                
+
                 userData.count++;
                 clearTimeout(userData.timer);
                 userData.timer = setTimeout(() => this.spamMap.delete(userId), time_window_seconds * 1000);
@@ -1645,10 +1660,10 @@ class PulchowkBot {
                 if (userData.count > message_limit) {
                     this.spamWarnings.set(userId, (this.spamWarnings.get(userId) || 0) + 1);
                     const currentWarnings = this.spamWarnings.get(userId);
-                    
+
                     // Assign light ban role for rate-based spam
                     await this._assignLightBanRole(message.member || message.author, message.guild);
-                    
+
                     if (message.channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
                         await message.channel.bulkDelete(Math.min(userData.count, 100), true);
                     }
@@ -1681,13 +1696,13 @@ class PulchowkBot {
         // Handle both User and GuildMember types
         const user = userOrMember.user || userOrMember;
         const userTag = user.tag || user.username || 'Unknown User';
-        
+
         this.debugConfig.log(`Cleaning all messages from spammer: ${userTag}`, 'antispam', { userId, guildId: guild.id });
 
         try {
             let totalDeleted = 0;
-            const channelsToCheck = guild.channels.cache.filter(channel => 
-                channel.type === ChannelType.GuildText || 
+            const channelsToCheck = guild.channels.cache.filter(channel =>
+                channel.type === ChannelType.GuildText ||
                 channel.type === ChannelType.GuildAnnouncement
             );
 
@@ -1704,7 +1719,7 @@ class PulchowkBot {
                     if (spammerMessages.size > 0) {
                         // Delete in batches (Discord allows bulk delete of up to 100 messages)
                         const messageArray = Array.from(spammerMessages.values());
-                        
+
                         // Filter messages older than 14 days (Discord bulk delete limit)
                         const twoWeeksAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
                         const recentMessages = messageArray.filter(msg => msg.createdTimestamp > twoWeeksAgo);
@@ -1766,7 +1781,7 @@ class PulchowkBot {
      */
     async _assignLightBanRole(userOrMember, guild) {
         const LIGHT_BAN_ROLE_ID = '1418234351493185657';
-        
+
         try {
             // Get member if we have a user object
             let member = userOrMember;

@@ -28,11 +28,12 @@ export const data = new SlashCommandBuilder()
             .setAutocomplete(true))
     .addStringOption(option =>
         option.setName('visibility')
-            .setDescription('Event visibility level')
+            .setDescription('Event visibility and access level')
             .setRequired(false)
             .addChoices(
-                { name: 'Public (visible to all server members)', value: 'public' },
-                { name: 'Private (club members only)', value: 'private' }
+                { name: 'Pulchowkian Only - Verified members only', value: 'pulchowkian' },
+                { name: 'Public (Server-wide) - Anyone can register', value: 'public' },
+                { name: 'Private (Club Only) - Club members only', value: 'private' }
             ));
 
 export async function execute(interaction) {
@@ -739,8 +740,18 @@ async function finalizeEventCreation(interaction, eventData) {
                 const row = new ActionRowBuilder().addComponents(joinButton);
 
                 // Post to appropriate channel using channelManager
+                // IMPORTANT: Ensure event_visibility is set correctly (not eventVisibility from basicData)
+                const eventForPosting = {
+                    ...eventData,
+                    id: eventId,
+                    event_visibility: eventData.eventVisibility || 'public'
+                };
+
+                // Remove the camelCase version to avoid confusion
+                delete eventForPosting.eventVisibility;
+
                 const message = await postEventToChannel(
-                    { ...eventData, id: eventId, event_visibility: eventData.eventVisibility || 'public' },
+                    eventForPosting,
                     eventData.club,
                     interaction.guild,
                     eventEmbed,

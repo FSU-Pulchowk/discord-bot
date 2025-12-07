@@ -540,6 +540,15 @@ async function handleExport(interaction) {
 
     const exportType = interaction.options.getString('export_type');
 
+    // Check if export type is events - redirect to /exportevent instead
+    if (exportType === 'events') {
+        return await interaction.editReply({
+            content: '⚠️ **Event exports are handled separately.**\n\n' +
+                'Please use `/exportevent <event_id>` to export individual event participants.\n\n' +
+                'To find event IDs, use `/clubs events` or check your club\'s events channel.'
+        });
+    }
+
     try {
         const { ClubExcelService } = await import('../../services/clubExcelService.js');
         const excelService = new ClubExcelService(interaction.client);

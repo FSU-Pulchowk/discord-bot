@@ -170,6 +170,15 @@ export async function updateClubPrivateEventChannel(clubId, channelId, db) {
  */
 export async function postEventToChannel(event, club, guild, eventEmbed, components = null) {
     try {
+        // DEBUG: Log the incoming event object
+        log(`DEBUG: postEventToChannel called`, 'event', {
+            eventId: event.id,
+            eventTitle: event.title,
+            event_visibility_value: event.event_visibility,
+            event_visibility_type: typeof event.event_visibility,
+            full_event_keys: Object.keys(event)
+        }, null, 'warn');
+
         let targetChannel;
 
         if (event.event_visibility === 'private') {
@@ -182,15 +191,33 @@ export async function postEventToChannel(event, club, guild, eventEmbed, compone
                 await updateClubPrivateEventChannel(club.id, targetChannel.id, db);
             }
 
-        } else {
-            // Post to public events channel
-            const publicChannelId = process.env.PUBLIC_EVENTS_CHANNEL_ID || '1364094394596069467';
+        } else if (event.event_visibility === 'public') {
+            // Post to server-wide public events channel (anyone can register)
+            const publicChannelId = process.env.PUBLIC_EVENTS_CHANNEL_ID || '1447074326963552367';
             targetChannel = await guild.channels.fetch(publicChannelId);
 
             if (!targetChannel) {
                 throw new Error(`Public events channel ${publicChannelId} not found`);
             }
+
+        } else {
+            // Pulchowkian only or default - post to verified pulchowkian events channel
+            const pulchowkianChannelId = process.env.PULCHOWKIAN_EVENTS_CHANNEL_ID || '1364094394596069467';
+            targetChannel = await guild.channels.fetch(pulchowkianChannelId);
+
+            if (!targetChannel) {
+                throw new Error(`Pulchowkian events channel ${pulchowkianChannelId} not found`);
+            }
         }
+
+        // Log channel routing decision
+        log(`Event visibility routing`, 'event', {
+            eventId: event.id,
+            eventTitle: event.title,
+            visibility: event.event_visibility,
+            targetChannelId: targetChannel.id,
+            targetChannelName: targetChannel.name
+        }, null, 'verbose');
 
         // Post the event
         const messageOptions = { embeds: [eventEmbed] };

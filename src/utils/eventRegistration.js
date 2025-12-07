@@ -398,6 +398,22 @@ export async function handlePaymentVerification(interaction) {
     const [, , eventId, userId] = interaction.customId.split('_');
 
     try {
+        // Get guild_id from registration (since interaction.guild is null in DMs)
+        const registration = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT guild_id FROM event_registrations WHERE event_id = ? AND user_id = ?`,
+                [parseInt(eventId), userId],
+                (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row);
+                }
+            );
+        });
+
+        if (!registration) {
+            throw new Error('Registration not found');
+        }
+
         // Update payment status
         await new Promise((resolve, reject) => {
             db.run(
@@ -419,7 +435,7 @@ export async function handlePaymentVerification(interaction) {
             db.run(
                 `INSERT OR IGNORE INTO event_participants (event_id, user_id, guild_id, rsvp_status)
                  VALUES (?, ?, ?, 'going')`,
-                [parseInt(eventId), userId, interaction.guild.id],
+                [parseInt(eventId), userId, registration.guild_id],
                 (err) => {
                     if (err) reject(err);
                     else resolve();
@@ -438,7 +454,7 @@ export async function handlePaymentVerification(interaction) {
             .setColor('#00FF00')
             .addFields({ name: '✅ Verified by', value: `<@${interaction.user.id}>`, inline: true });
 
-        await interaction.editReply({ embeds: [updatedEmbed], components: [] });
+        await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
 
         log('Payment verified', 'payment', { eventId, userId, verifiedBy: interaction.user.id }, null, 'success');
 
@@ -447,7 +463,7 @@ export async function handlePaymentVerification(interaction) {
         await interaction.followUp({
             content: '❌ An error occurred while verifying payment.',
             ephemeral: true
-        });
+        }).catch(() => { });
     }
 }
 
@@ -495,7 +511,7 @@ export async function handlePaymentRejection(interaction) {
             .setColor('#FF0000')
             .addFields({ name: '❌ Rejected by', value: `<@${interaction.user.id}>`, inline: true });
 
-        await interaction.editReply({ embeds: [updatedEmbed], components: [] });
+        await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
 
         log('Payment rejected', 'payment', { eventId, userId, rejectedBy: interaction.user.id }, null, 'warn');
 
@@ -504,6 +520,6 @@ export async function handlePaymentRejection(interaction) {
         await interaction.followUp({
             content: '❌ An error occurred while rejecting payment.',
             ephemeral: true
-        });
+        }).catch(() => { });
     }
 }
