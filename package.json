@@ -28,7 +28,7 @@
     "http-proxy-agent": "^7.0.2",
     "node-fetch": "^3.3.2",
     "node-schedule": "^2.1.1",
-    "nodemailer": "^7.0.7",
+    "nodemailer": "^7.0.11",
     "pdf2pic": "^3.2.0",
     "pdfjs-dist": "^5.3.93",
     "puppeteer": "^24.14.0",
