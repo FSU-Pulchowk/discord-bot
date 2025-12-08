@@ -300,10 +300,9 @@ async function storePaymentProof(eventId, userId, proofUrl, fileName) {
             `UPDATE event_registrations 
              SET payment_proof_url = ?, 
                  payment_status = 'pending', 
-                 updated_at = strftime('%s', 'now'),
-                 registration_notes = ?
+                 updated_at = strftime('%s', 'now')
              WHERE event_id = ? AND user_id = ?`,
-            [proofUrl, `File: ${fileName}`, eventId, userId],
+            [proofUrl, eventId, userId],
             (err) => {
                 if (err) reject(err);
                 else resolve();
@@ -428,10 +427,10 @@ export async function handlePaymentVerification(interaction) {
     const [, , eventId, userId] = interaction.customId.split('_');
 
     try {
-        // Get guild_id from registration (since interaction.guild is null in DMs)
+        // Get guild_id and registration data from registration (since interaction.guild is null in DMs)
         const registration = await new Promise((resolve, reject) => {
             db.get(
-                `SELECT guild_id FROM event_registrations WHERE event_id = ? AND user_id = ?`,
+                `SELECT guild_id, registration_notes FROM event_registrations WHERE event_id = ? AND user_id = ?`,
                 [parseInt(eventId), userId],
                 (err, row) => {
                     if (err) reject(err);
@@ -460,12 +459,12 @@ export async function handlePaymentVerification(interaction) {
             );
         });
 
-        // Add to event_participants
+        // Add to event_participants with registration data
         await new Promise((resolve, reject) => {
             db.run(
-                `INSERT OR IGNORE INTO event_participants (event_id, user_id, guild_id, rsvp_status)
-                 VALUES (?, ?, ?, 'going')`,
-                [parseInt(eventId), userId, registration.guild_id],
+                `INSERT OR IGNORE INTO event_participants (event_id, user_id, guild_id, rsvp_status, registration_data)
+                 VALUES (?, ?, ?, 'going', ?)`,
+                [parseInt(eventId), userId, registration.guild_id, registration.registration_notes],
                 (err) => {
                     if (err) reject(err);
                     else resolve();

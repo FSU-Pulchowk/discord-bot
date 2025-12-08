@@ -52,6 +52,7 @@ import {
 } from '../commands/slash/createEvent.js';
 import { handleTransferApproval } from '../commands/slash/transferpresident.js';
 import { handleButtonInteraction as handleVerifyStartButton } from '../commands/slash/verify.js';
+import { handleRegOtpButton, handleRegOtpModal } from '../utils/nonVerifiedRegOtpHandlers.js';
 
 export async function handleInteraction(interaction) {
     try {
@@ -179,6 +180,11 @@ export async function handleInteraction(interaction) {
                 // Event creation OTP verification modal
                 else if (customId === 'event_otp_modal') {
                     await handleEventCreationOtpModal(interaction);
+                }
+
+                // Registration OTP modal for non-verified users
+                else if (customId.startsWith('reg_otp_modal_')) {
+                    await handleRegOtpModal(interaction);
                 }
 
                 else {
@@ -312,6 +318,11 @@ export async function handleInteraction(interaction) {
                     await handleContinueEventStep2(interaction);
                 }
 
+                // Registration OTP button for non-verified users
+                else if (customId.startsWith('reg_otp_button_')) {
+                    await handleRegOtpButton(interaction);
+                }
+
                 else {
                     log(`Unhandled button: ${customId}`, 'interaction', null, null, 'warn');
                 }
@@ -361,7 +372,16 @@ async function checkInteractionExpiry(interaction) {
  * Handle command execution errors
  */
 async function handleCommandError(interaction, error) {
-    log(`Error executing command: ${interaction.commandName}`, 'interaction', null, error, 'error');
+    // Don't try to respond to expired or unknown interactions
+    if (error.message?.includes('Unknown interaction') ||
+        error.message?.includes('already been acknowledged') ||
+        error.code === 10062 ||
+        error.code === 40060) {
+        log(`Command interaction expired: ${interaction.commandName}`, 'interaction', null, null, 'warn');
+        return;
+    }
+
+    log(`Error in ${interaction.commandName} command`, 'interaction', null, error, 'error');
 
     const errorMessage = {
         content: '❌ There was an error executing this command!',

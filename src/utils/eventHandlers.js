@@ -484,7 +484,30 @@ export async function handleJoinEventButton(interaction) {
         // Check if user is verified
         const isVerified = PULCHOWKIAN_ROLE_ID && interaction.member.roles.cache.has(PULCHOWKIAN_ROLE_ID);
 
+        // For non-verified users, check event visibility first
         if (!isVerified) {
+            // Get event details to check visibility
+            const event = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT event_visibility FROM club_events WHERE id = ?`,
+                    [eventId],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row);
+                    }
+                );
+            });
+
+            // Block non-verified users from Pulchowkian-only events
+            if (event && event.event_visibility === 'pulchowkian') {
+                return await interaction.reply({
+                    content: '❌ **Pulchowkian Only Event**\n\n' +
+                        'This event is restricted to verified Pulchowkian members only.\n\n' +
+                        'Please use `/verify` to verify your Pulchowk Campus email and get access to Pulchowkian events.',
+                    ephemeral: true
+                });
+            }
+
             // Non-verified users: collect email and phone via modal
             const { showNonVerifiedModal } = await import('./nonVerifiedRegistration.js');
             return await showNonVerifiedModal(interaction, eventId);
@@ -885,9 +908,28 @@ export async function handlePreviewParticipants(interaction) {
                             if (regData.phoneNumber) phone = regData.phoneNumber;
                             if (regData.email && !p.email) email = regData.email;
                             if (regData.fullName && !p.real_name) name = regData.fullName;
+
+                            // Debug: Log what data we found
+                            log('Parsed registration data for participant', 'event', {
+                                userId: p.user_id,
+                                hasFullName: !!regData.fullName,
+                                hasEmail: !!regData.email,
+                                hasPhone: !!regData.phoneNumber
+                            }, null, 'debug');
                         } catch (e) {
-                            // Invalid JSON, use defaults
+                            // Log invalid JSON to help debug
+                            log('Invalid registration_data JSON', 'event', {
+                                userId: p.user_id,
+                                rawData: p.registration_data?.substring(0, 100)
+                            }, e, 'warn');
                         }
+                    } else {
+                        // Log when registration_data is missing
+                        log('No registration_data for participant', 'event', {
+                            userId: p.user_id,
+                            hasRealName: !!p.real_name,
+                            hasEmail: !!p.email
+                        }, null, 'debug');
                     }
 
                     const registeredDate = p.registration_date

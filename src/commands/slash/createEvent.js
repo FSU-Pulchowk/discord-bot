@@ -464,11 +464,20 @@ export async function handleContinueEventStep2(interaction) {
     try {
         await interaction.showModal(modal2);
     } catch (error) {
-        log('Error showing step 2 modal from button', 'club', null, error, 'error');
-        await interaction.followUp({
-            content: '❌ Failed to show form. Please try again.',
-            flags: MessageFlags.Ephemeral
-        });
+        // If modal fails, interaction is consumed but not properly handled
+        log('Error showing step 2 modal from button', 'club', { error: error.message, code: error.code }, error, 'error');
+
+        // Only try to reply if it's NOT an unknown interaction error
+        if (!error.message?.includes('Unknown interaction') && error.code !== 10062) {
+            try {
+                await interaction.reply({
+                    content: '❌ Failed to show event form. Please try again.',
+                    flags: MessageFlags.Ephemeral
+                }).catch(() => { });
+            } catch {
+                // Silently fail if reply doesn't work
+            }
+        }
     }
 }
 
@@ -542,11 +551,21 @@ export async function handleContinueEventPayment(interaction) {
     try {
         await interaction.showModal(paymentModal);
     } catch (error) {
-        log('Error showing payment modal', 'club', null, error, 'error');
-        await interaction.followUp({
-            content: '❌ Failed to show payment form. Please try again.',
-            flags: MessageFlags.Ephemeral
-        });
+        // If modal fails, interaction is consumed but not properly handled
+        // Log the error but can't reply since interaction token may be invalid
+        log('Error showing payment modal', 'club', { error: error.message, code: error.code }, error, 'error');
+
+        // Only try to reply if it's NOT an unknown interaction error
+        if (!error.message?.includes('Unknown interaction') && error.code !== 10062) {
+            try {
+                await interaction.reply({
+                    content: '❌ Failed to show payment form. Please try again.',
+                    flags: MessageFlags.Ephemeral
+                }).catch(() => { });
+            } catch {
+                // Silently fail if reply doesn't work
+            }
+        }
     }
 }
 
