@@ -1780,7 +1780,7 @@ class PulchowkBot {
      * @private
      */
     async _assignLightBanRole(userOrMember, guild) {
-        const LIGHT_BAN_ROLE_ID = '1418234351493185657';
+        const LIGHT_BAN_ROLE_ID = process.env.LIGHT_BAN_ROLE_ID||'1418234351493185657';
 
         try {
             // Get member if we have a user object
