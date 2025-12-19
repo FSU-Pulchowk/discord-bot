@@ -668,6 +668,7 @@ class PulchowkBot {
             if (await this._handleGotVerifiedButtons(interaction)) return;
             if (await this._handleSetupButtons(interaction)) return;
             if (await this._handleWarnButtons(interaction)) return;
+            if (await this._handleCompromiseButtons(interaction)) return;
             await this._ensureDeferred(interaction);
             await interaction.editReply({
                 content: '⚠️ This button interaction is no longer available or has expired.',
@@ -690,6 +691,52 @@ class PulchowkBot {
         }
 
         return false;
+    }
+
+    /**
+     * Handles compromise alert buttons.
+     * @private
+     */
+    async _handleCompromiseButtons(interaction) {
+        const customId = interaction.customId;
+        if (!customId.startsWith('unmute_trusted_') && !customId.startsWith('ban_compromised_')) return false;
+
+        // Ensure only admins/moderators can use these buttons
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+            await interaction.reply({ content: '⚠️ You do not have permission to resolve this alert.', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+
+        const targetId = customId.split('_')[2]; // unmute_trusted_ID or ban_compromised_ID
+        const targetMember = await interaction.guild.members.fetch(targetId).catch(() => null);
+
+        try {
+            if (customId.startsWith('unmute_trusted_')) {
+                if (targetMember && targetMember.communicationDisabledUntilTimestamp > Date.now()) {
+                    await targetMember.timeout(null, `False positive spam alert: Cleared by ${interaction.user.tag}`);
+                }
+                await interaction.reply({ content: `✅ Successfully unmuted **${targetMember ? targetMember.user.tag : targetId}**.`, flags: MessageFlags.Ephemeral });
+            } else if (customId.startsWith('ban_compromised_')) {
+                if (targetMember && targetMember.bannable) {
+                    await targetMember.ban({ reason: `Confirmed compromised account: Action by ${interaction.user.tag}` });
+                    await interaction.reply({ content: `🚨 Successfully banned **${targetMember ? targetMember.user.tag : targetId}**.`, flags: MessageFlags.Ephemeral });
+                } else {
+                    await interaction.reply({ content: `⚠️ Could not ban user (possibly already left or has higher permissions).`, flags: MessageFlags.Ephemeral });
+                }
+            }
+
+            // Disable buttons on the original message
+            try {
+                await interaction.message.edit({ components: [] });
+            } catch (e) {
+                this.debugConfig.log('Could not update alert message components', 'interaction', null, e, 'warn');
+            }
+        } catch (error) {
+            this.debugConfig.log('Error handling compromise button', 'interaction', null, error, 'error');
+            await this._safeErrorReply(interaction, '⚠️ Failed to perform action.');
+        }
+
+        return true;
     }
     /**
      * Handles verification-related buttons with improved error handling.
@@ -1544,16 +1591,30 @@ class PulchowkBot {
         const content = message.content || '';
 
         try {
+            // Check if user is verified
+            const isVerified = await new Promise((resolve) => {
+                this.client.db.get(
+                    `SELECT user_id FROM verified_users WHERE user_id = ? AND guild_id = ?`,
+                    [userId, guildId],
+                    (err, row) => resolve(!!row)
+                );
+            });
+
             // First, check for content-based spam (high priority)
-            const spamCheck = detectSpam(content);
+            const spamCheck = detectSpam(content, message.member, isVerified);
             const isKnownSpamPattern = matchesKnownSpamPattern(content);
 
             if (spamCheck.isSpam || isKnownSpamPattern) {
+                const userTier = spamCheck.userTier || 'Unknown';
+                const isTrusted = userTier.includes('Tier 3');
+                const severity = spamCheck.severity || 'high';
+
                 this.debugConfig.log('Spam detected via content analysis', 'antispam', {
                     userId,
                     guildId,
+                    tier: userTier,
                     reason: spamCheck.reason || 'Known spam pattern',
-                    severity: spamCheck.severity || 'high',
+                    severity: severity,
                     messagePreview: content.substring(0, 100)
                 }, null, 'warn');
 
@@ -1566,57 +1627,82 @@ class PulchowkBot {
                     this.debugConfig.log('Could not delete spam message', 'antispam', { messageId: message.id }, deleteError, 'warn');
                 }
 
-                // Clean all messages from this spammer
-                await this._cleanSpammerMessages(message.member || message.author, message.guild);
-
-                // Apply punishment based on severity
-                const severity = spamCheck.severity || 'high';
-
-                // Assign light server ban role (view-only access)
-                await this._assignLightBanRole(message.member || message.author, message.guild);
-
-                if (severity === 'high' || isKnownSpamPattern) {
-                    // Immediate ban for high-severity spam
-                    if (message.member?.bannable) {
-                        try {
-                            await message.member.ban({
-                                reason: `Anti-spam: Content-based spam detection - ${spamCheck.reason || 'Known spam pattern'}`
-                            });
-
-                            const logChannel = await this._getLogChannel(message.guild);
-                            if (logChannel) {
-                                const banEmbed = new EmbedBuilder()
-                                    .setColor(this.colors.error)
-                                    .setTitle('🚨 Spammer Banned')
-                                    .setDescription(`**User:** ${message.author.tag} (${message.author.id})\n**Reason:** Content-based spam detection\n**Severity:** High\n**Message Preview:** ${content.substring(0, 200)}\n**Light Ban Role:** Assigned`)
-                                    .setTimestamp();
-                                await logChannel.send({ embeds: [banEmbed] });
-                            }
-
-                            this.debugConfig.log(`Banned spammer: ${message.author.tag}`, 'antispam', { userId, reason: spamCheck.reason }, null, 'success');
-                        } catch (banError) {
-                            this.debugConfig.log('Could not ban spammer', 'antispam', { userId }, banError, 'error');
-                            // Fallback to timeout if ban fails
-                            if (message.member?.moderatable) {
-                                await message.member.timeout(7 * 24 * 60 * 60 * 1000, 'Anti-spam: Content-based spam (ban failed)');
-                            }
-                        }
-                    } else if (message.member?.moderatable) {
-                        // Timeout if can't ban
-                        await message.member.timeout(7 * 24 * 60 * 60 * 1000, 'Anti-spam: Content-based spam');
-                        this.debugConfig.log(`Timed out spammer (cannot ban): ${message.author.tag}`, 'antispam', { userId }, null, 'warn');
-                    }
-                } else if (severity === 'medium') {
-                    // Timeout for medium severity
+                // If it's a trusted user (Tier 3), we treat it as a potential compromise
+                if (isTrusted) {
+                    // Mute (timeout) instead of ban
                     if (message.member?.moderatable) {
-                        await message.member.timeout(24 * 60 * 60 * 1000, 'Anti-spam: Medium severity spam');
-                        this.debugConfig.log(`Timed out spammer (medium severity): ${message.author.tag}`, 'antispam', { userId }, null, 'warn');
+                        await message.member.timeout(12 * 60 * 60 * 1000, `Potential Account Compromise: ${spamCheck.reason}`);
+                    }
+
+                    // Priority Alert to log channel
+                    const logChannel = await this._getLogChannel(message.guild);
+                    if (logChannel) {
+                        const alertEmbed = new EmbedBuilder()
+                            .setColor(this.colors.warning)
+                            .setTitle('⚠️ Potential Account Compromise Detected')
+                            .setDescription(`**Trusted User:** ${message.author.tag} (${message.author.id})\n**Tier:** ${userTier}\n**Detected at:** <t:${Math.floor(Date.now() / 1000)}:f>\n**Reason:** ${spamCheck.reason}\n**Action Taken:** 12h Timeout (Review Required)\n\n**Message Preview:**\n\`\`\`${content.substring(0, 500)}\`\`\``)
+                            .setFooter({ text: 'High-score detection triggered for trusted account' })
+                            .setTimestamp();
+
+                        const actionRow = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`unmute_trusted_${userId}`)
+                                .setLabel('False Positive (Unmute)')
+                                .setStyle(ButtonStyle.Success),
+                            new ButtonBuilder()
+                                .setCustomId(`ban_compromised_${userId}`)
+                                .setLabel('Confirm Compromise (Ban)')
+                                .setStyle(ButtonStyle.Danger)
+                        );
+
+                        await logChannel.send({ embeds: [alertEmbed], components: [actionRow] });
+                    }
+                } else {
+                    // Regular user/spammer handling
+                    // Clean all messages from this spammer
+                    await this._cleanSpammerMessages(message.member || message.author, message.guild);
+
+                    // Assign light server ban role (view-only access)
+                    await this._assignLightBanRole(message.member || message.author, message.guild);
+
+                    if (severity === 'high' || isKnownSpamPattern) {
+                        // Immediate ban for high-severity spam
+                        if (message.member?.bannable) {
+                            try {
+                                await message.member.ban({
+                                    reason: `Anti-spam: Content-based spam detection - ${spamCheck.reason || 'Known spam pattern'}`
+                                });
+
+                                const logChannel = await this._getLogChannel(message.guild);
+                                if (logChannel) {
+                                    const banEmbed = new EmbedBuilder()
+                                        .setColor(this.colors.error)
+                                        .setTitle('🚨 Spammer Banned')
+                                        .setDescription(`**User:** ${message.author.tag} (${message.author.id})\n**Tier:** ${userTier}\n**Reason:** ${spamCheck.reason || 'Known spam pattern'}\n**Severity:** High\n**Message Preview:** ${content.substring(0, 200)}\n**Light Ban Role:** Assigned`)
+                                        .setTimestamp();
+                                    await logChannel.send({ embeds: [banEmbed] });
+                                }
+
+                                this.debugConfig.log(`Banned spammer: ${message.author.tag}`, 'antispam', { userId, reason: spamCheck.reason }, null, 'success');
+                            } catch (banError) {
+                                this.debugConfig.log('Could not ban spammer', 'antispam', { userId }, banError, 'error');
+                                if (message.member?.moderatable) {
+                                    await message.member.timeout(7 * 24 * 60 * 60 * 1000, 'Anti-spam: Content-based spam (ban failed)');
+                                }
+                            }
+                        } else if (message.member?.moderatable) {
+                            await message.member.timeout(7 * 24 * 60 * 60 * 1000, 'Anti-spam: Content-based spam');
+                        }
+                    } else if (severity === 'medium') {
+                        if (message.member?.moderatable) {
+                            await message.member.timeout(24 * 60 * 60 * 1000, 'Anti-spam: Medium severity spam');
+                        }
                     }
                 }
 
                 // Mark user as spammer to prevent further processing
                 this.spamMap.set(userId, { isSpammer: true, detectedAt: Date.now() });
-                return; // Exit early, don't process rate-based spam
+                return;
             }
 
             // Continue with rate-based spam detection
@@ -1780,7 +1866,7 @@ class PulchowkBot {
      * @private
      */
     async _assignLightBanRole(userOrMember, guild) {
-        const LIGHT_BAN_ROLE_ID = process.env.LIGHT_BAN_ROLE_ID||'1418234351493185657';
+        const LIGHT_BAN_ROLE_ID = process.env.LIGHT_BAN_ROLE_ID || '1418234351493185657';
 
         try {
             // Get member if we have a user object

@@ -1,144 +1,151 @@
 /**
- * Advanced spam detection utility
- * Detects various spam patterns including financial scams, external links, and suspicious content
+ * Advanced spam detection utility with tiered trust levels
+ * Detects financial scams, external links, and suspicious patterns with context awareness
  */
 
+import { PermissionsBitField } from 'discord.js';
+
 /**
- * Detects if a message contains spam patterns
+ * Detects if a message contains spam patterns using a point-based system
  * @param {string} content - The message content to check
- * @returns {Object} - { isSpam: boolean, reason: string, severity: 'high'|'medium'|'low' }
+ * @param {Object} member - The Discord GuildMember object
+ * @param {boolean} isVerified - Whether the user is in the verified_users database
+ * @returns {Object} - { isSpam: boolean, reason: string, severity: 'high'|'medium'|'low', score: number }
  */
-export function detectSpam(content) {
+export function detectSpam(content, member = null, isVerified = false) {
     if (!content || typeof content !== 'string') {
-        return { isSpam: false, reason: null, severity: null };
+        return { isSpam: false, reason: null, severity: null, score: 0 };
     }
 
     const lowerContent = content.toLowerCase();
     const normalizedContent = lowerContent.replace(/[^\w\s@]/g, ' ').replace(/\s+/g, ' ');
 
-    // High severity patterns - immediate ban
-    const highSeverityPatterns = [
-        // Financial scam patterns
-        /\$(\d+)?k?\s*(or\s*more)?\s*(within|in)\s*(a\s*)?(week|day|month)/i,
-        /earn(ing)?\s*\$?\d+[km]?\s*(or\s*more)?\s*(within|in)/i,
-        /reimburse\s*me\s*\d+%/i,
-        /profit.*once\s*you\s*receive/i,
-        /only\s*serious.*interested/i,
-        /send\s*me\s*(a\s*)?(friend\s*request|dm|direct\s*message)/i,
-        /ask\s*me\s*how/i,
-        /via\s*telegram/i,
-        /@\w+.*telegram/i,
-        /link\s*in\s*bio/i,
-        
-        // External platform requests
-        /(telegram|whatsapp|signal|discord|instagram|facebook|twitter).*@/i,
-        /contact\s*me\s*(on|via|through)/i,
-        /dm\s*me\s*(for|to|on)/i,
-        
-        // Suspicious financial language
-        /guaranteed\s*(profit|earnings|income|money)/i,
-        /make\s*money\s*(fast|quick|easy|now)/i,
-        /passive\s*income.*guaranteed/i,
-        /investment.*return.*guaranteed/i,
-        /no\s*risk.*high\s*return/i,
-        
-        // Pyramid scheme patterns
-        /first\s*\d+\s*(people|person)/i,
-        /limited\s*(spots|slots|offers?)/i,
-        /exclusive\s*opportunity/i,
-    ];
+    let score = 0;
+    const reasons = [];
 
-    // Medium severity patterns - timeout/warning
-    const mediumSeverityPatterns = [
-        /(click|check|visit).*(link|url|website|site)/i,
-        /free\s*money/i,
-        /get\s*rich\s*quick/i,
-        /work\s*from\s*home.*\$?\d+/i,
-        /crypto.*investment.*guaranteed/i,
+    // --- 1. Trusted Domains (Negative score/Weights) ---
+    const trustedDomains = [
+        'google.com', 'pcampus.edu.np', 'github.com', 'discord.com', 
+        'zoom.us', 'microsoft.com', 'youtube.com', 'facebook.com', 
+        'instagram.com', 'twitter.com', 'linkedin.com', 'stackoverflow.com'
     ];
+    
+    const urlPattern = /(https?:\/\/|www\.)[^\s/$.?#].[^\s]*/gi;
+    const urls = content.match(urlPattern) || [];
+    let riskyUrlCount = 0;
 
-    // Check high severity patterns
-    for (const pattern of highSeverityPatterns) {
-        if (pattern.test(content) || pattern.test(normalizedContent)) {
-            return {
-                isSpam: true,
-                reason: 'Detected high-severity spam pattern (financial scam/external contact)',
-                severity: 'high'
-            };
+    for (const url of urls) {
+        let isTrusted = false;
+        for (const domain of trustedDomains) {
+            if (url.toLowerCase().includes(domain)) {
+                isTrusted = true;
+                break;
+            }
+        }
+        if (!isTrusted) {
+            riskyUrlCount++;
         }
     }
 
-    // Check for multiple suspicious keywords (scoring system)
+    if (riskyUrlCount > 0) {
+        score += riskyUrlCount * 1.5;
+        reasons.push(`${riskyUrlCount} untrusted link(s)`);
+    }
+
+    // --- 2. High Severity Patterns (Direct Point Addition) ---
+    const patterns = [
+        { regex: /\$?\d+[km]?\s*(or\s*more)?\s*(within|in)\s*(a\s*)?(week|day|month)/i, points: 4, reason: 'Financial promise' },
+        { regex: /earn(ing)?\s*\$?\d+[km]?\s*(or\s*more)?\s*(within|in)/i, points: 4, reason: 'Earnings hook' },
+        { regex: /reimburse\s*me\s*\d+%/i, points: 3, reason: 'Reimbursement scheme' },
+        { regex: /profit.*once\s*you\s*receive/i, points: 4, reason: 'Advance fee scam' },
+        { regex: /only\s*serious.*interested/i, points: 2, reason: 'Suspicious urgency' },
+        { regex: /send\s*me\s*(a\s*)?(friend\s*request|dm|direct\s*message)/i, points: 1.5, reason: 'Contact request' },
+        { regex: /ask\s*me\s*how/i, points: 2.3, reason: 'Coaching/Scheme bait' },
+        { regex: /(@\w+.*telegram|via\s*telegram|t\.me\/)/i, points: 3.5, reason: 'Telegram redirection' },
+        { regex: /link\s*in\s*bio/i, points: 2.5, reason: 'Social redirection' },
+        { regex: /(whatsapp|signal|line|viber).*@?\d+/i, points: 3.5, reason: 'External messaging' },
+        { regex: /guaranteed\s*(profit|earnings|income|money)/i, points: 4, reason: 'Guaranteed returns' },
+        { regex: /make\s*money\s*(fast|quick|easy|now)/i, points: 3, reason: 'Get-rich-quick' },
+        { regex: /passive\s*income.*guaranteed/i, points: 4, reason: 'Passive income scam' },
+        { regex: /first\s*\d+\s*(people|person)/i, points: 2, reason: 'False scarcity' },
+        { regex: /exclusive\s*opportunity/i, points: 2, reason: 'Exclusive bait' },
+        { regex: /free\s*money/i, points: 5, reason: 'Free money scam' },
+        { regex: /crypto.*investment.*guaranteed/i, points: 5, reason: 'Crypto scam' },
+    ];
+
+    for (const p of patterns) {
+        if (p.regex.test(content) || p.regex.test(normalizedContent)) {
+            score += p.points;
+            reasons.push(p.reason);
+        }
+    }
+
+    // --- 3. Suspicious Keyword Scoring ---
     const suspiciousKeywords = [
-        'earn', 'profit', 'money', 'income', 'investment', 'guaranteed',
-        'telegram', 'dm me', 'friend request', 'contact me', 'link in bio',
-        'reimburse', 'serious', 'interested', 'exclusive', 'limited',
-        'first 10', 'first 5', 'first 20', 'within a week', 'within days'
+        'earn', 'profit', 'income', 'investment', 
+        'limited', 'offer', 'spots', 'slots', 
+        'reimburse', 'serious', 'dm me', 'contact'
     ];
 
-    let suspiciousScore = 0;
+    let keywordMatches = 0;
     for (const keyword of suspiciousKeywords) {
-        const regex = new RegExp(keyword.replace(/\s+/g, '\\s+'), 'i');
+        const regex = new RegExp(`\\b${keyword}\\b`, 'i');
         if (regex.test(content)) {
-            suspiciousScore++;
+            keywordMatches++;
+        }
+    }
+    score += (keywordMatches * 0.5);
+
+    // --- 4. Tiered Thresholds ---
+    let threshold = 3.5; // Base threshold (Tier 1: New/Guest)
+    let userTier = 'Tier 1 (Guest)';
+
+    if (member) {
+        const roles = member.roles.cache;
+        const isAdmin = member.permissions.has(PermissionsBitField.Flags.Administrator) || 
+                        member.permissions.has(PermissionsBitField.Flags.ManageMessages);
+        
+        // Define "Important" role IDs (from env logic in bot.js)
+        const importantRoleIds = [
+            process.env.ADMIN_ROLE_ID,
+            process.env.MODERATOR_ROLE_ID,
+            process.env.FSU_EXECUTIVE_ROLE_ID,
+            process.env.CLUB_PRESIDENT_ROLE_ID
+        ].filter(Boolean);
+
+        const hasImportantRole = importantRoleIds.some(id => roles.has(id));
+
+        if (isAdmin || hasImportantRole) {
+            threshold = 9.0; // High threshold for Tier 3 (Important People)
+            userTier = 'Tier 3 (Important/Admin)';
+        } else if (isVerified) {
+            threshold = 5.5; // Medium threshold for Tier 2 (Verified Members)
+            userTier = 'Tier 2 (Verified Member)';
         }
     }
 
-    // If 3+ suspicious keywords found, it's likely spam
-    if (suspiciousScore >= 3) {
-        return {
-            isSpam: true,
-            reason: `Multiple suspicious keywords detected (${suspiciousScore} matches)`,
-            severity: 'high'
-        };
-    }
+    // Special case: If score is EXTREMELY high (blatant scam), even admins might be compromised
+    const isBlatantScam = score >= 12;
 
-    // Check medium severity patterns
-    for (const pattern of mediumSeverityPatterns) {
-        if (pattern.test(content) || pattern.test(normalizedContent)) {
-            return {
-                isSpam: true,
-                reason: 'Detected medium-severity spam pattern',
-                severity: 'medium'
-            };
-        }
-    }
+    const isSpam = score >= threshold;
+    const severity = score >= (threshold + 4) || isBlatantScam ? 'high' : (score >= threshold ? 'medium' : 'low');
 
-    // Check for URLs (especially suspicious domains)
-    const urlPattern = /(https?:\/\/|www\.|t\.me|telegram\.me|discord\.gg|discord\.com\/invite)/i;
-    if (urlPattern.test(content) && suspiciousScore >= 2) {
-        return {
-            isSpam: true,
-            reason: 'Suspicious URL with multiple spam keywords',
-            severity: 'high'
-        };
-    }
-
-    return { isSpam: false, reason: null, severity: null };
+    return {
+        isSpam,
+        reason: isSpam ? `Detected patterns: ${reasons.join(', ')} (${userTier})` : null,
+        severity: isSpam ? severity : null,
+        score,
+        userTier
+    };
 }
 
 /**
- * Checks if content matches the specific spam pattern provided by user
- * @param {string} content - The message content to check
+ * Legacy check for internal use
+ * @param {string} content 
  * @returns {boolean}
  */
 export function matchesKnownSpamPattern(content) {
-    if (!content || typeof content !== 'string') return false;
-
-    const lowerContent = content.toLowerCase();
-    
-    // Check for the specific pattern from the user's example
-    const hasFinancialPromise = /\$?\d+[km]?\s*(or\s*more)?\s*(within|in)\s*(a\s*)?(week|day)/i.test(content);
-    const hasReimburse = /reimburse.*\d+%/i.test(content);
-    const hasSeriousRequest = /(only\s*serious|interested).*(friend\s*request|dm|send\s*me)/i.test(content);
-    const hasTelegram = /(telegram|@\w+.*telegram|via\s*telegram)/i.test(content);
-    const hasLinkInBio = /link\s*in\s*bio/i.test(content);
-    const hasAskHow = /ask\s*me\s*(how|via)/i.test(content);
-
-    // If multiple indicators are present, it's the known spam pattern
-    const indicators = [hasFinancialPromise, hasReimburse, hasSeriousRequest, hasTelegram, hasLinkInBio, hasAskHow];
-    const matchCount = indicators.filter(Boolean).length;
-
-    return matchCount >= 3; // At least 3 indicators match
+    const result = detectSpam(content);
+    return result.isSpam && result.score >= 7;
 }
 
