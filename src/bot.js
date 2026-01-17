@@ -28,6 +28,7 @@ import { fromPath } from 'pdf2pic';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { NoticeProcessor } from './utils/NoticeProcessor.js';
 import { detectSpam, matchesKnownSpamPattern } from './utils/spamDetector.js';
+import { handleRoleDelete, handleRoleUpdate } from './events/roleProtection.js';
 
 import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
@@ -297,6 +298,11 @@ class PulchowkBot {
         this.client.on(Events.GuildMemberRemove, this._safeEventHandler('GuildMemberRemove', this._onGuildMemberRemove.bind(this)));
         this.client.on(Events.MessageReactionAdd, this._safeEventHandler('MessageReactionAdd', this._onMessageReactionAdd.bind(this)));
         this.client.on(Events.MessageReactionRemove, this._safeEventHandler('MessageReactionRemove', this._onMessageReactionRemove.bind(this)));
+
+        // Role Protection Events
+        this.client.on(Events.GuildRoleDelete, this._safeEventHandler('GuildRoleDelete', handleRoleDelete));
+        this.client.on(Events.GuildRoleUpdate, this._safeEventHandler('GuildRoleUpdate', handleRoleUpdate));
+
         this.client.on(Events.Error, error => this.debugConfig.log('Discord.js Client Error:', 'client', null, error, 'error'));
         this.client.on(Events.ShardDisconnect, (event, id) => this.debugConfig.log(`Shard ${id} Disconnected:`, 'client', { event }, null, 'warn'));
         this.client.on(Events.ShardReconnecting, (id) => this.debugConfig.log(`Shard ${id} Reconnecting...`, 'client', null, null, 'info'));
