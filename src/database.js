@@ -40,6 +40,7 @@ async function initializeDatabase() {
                 createModerationActionsTable();
                 createReputationTable();
                 createModCooldownsTable();
+                createGuildStructureBackupsTable();
 
                 // ==================== CLUB TABLES ====================
 
@@ -276,7 +277,9 @@ function createAdminTasksTable() {
         assigned_to TEXT,
         status TEXT DEFAULT 'pending',
         createdAt INTEGER,
-        due_date DATETIME
+        due_date DATETIME,
+        completedAt INTEGER,
+        completedBy TEXT
     )`, (err) => {
         if (err) log('Error creating admin_tasks:', 'error', null, err, 'error');
         else log('✓ admin_tasks', 'init');
@@ -285,7 +288,9 @@ function createAdminTasksTable() {
     migrateTable('admin_tasks', [
         { name: "creatorId", type: "TEXT", defaultValue: "NULL" },
         { name: "taskDescription", type: "TEXT", defaultValue: "NULL" },
-        { name: "createdAt", type: "INTEGER", defaultValue: "NULL" }
+        { name: "createdAt", type: "INTEGER", defaultValue: "NULL" },
+        { name: "completedAt", type: "INTEGER", defaultValue: "NULL" },
+        { name: "completedBy", type: "TEXT", defaultValue: "NULL" }
     ]);
 }
 
@@ -327,6 +332,17 @@ function createModCooldownsTable() {
     )`, (err) => {
         if (err) log('Error creating mod_cooldowns:', 'error', null, err, 'error');
         else log('✓ mod_cooldowns', 'init');
+    });
+}
+
+function createGuildStructureBackupsTable() {
+    db.run(`CREATE TABLE IF NOT EXISTS guild_structure_backups (
+        guild_id TEXT PRIMARY KEY,
+        backup_data TEXT NOT NULL,
+        saved_at INTEGER NOT NULL
+    )`, (err) => {
+        if (err) log('Error creating guild_structure_backups:', 'error', null, err, 'error');
+        else log('✓ guild_structure_backups', 'init');
     });
 }
 

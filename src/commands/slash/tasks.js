@@ -40,13 +40,15 @@ export async function execute(interaction) {
         return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
     }
 
+    await interaction.deferReply({ ephemeral: true });
+
     const subcommand = interaction.options.getSubcommand();
     const db = interaction.client.db;
 
     switch (subcommand) {
         case 'add': {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
-                return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+                return interaction.editReply({ content: 'You do not have permission to use this command.' });
             }
 
             const taskDescription = interaction.options.getString('description');
@@ -59,14 +61,14 @@ export async function execute(interaction) {
                     if (err) {
                         console.error('Error inserting task:', err.message);
                         const embed = new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error adding task: ${err.message}`);
-                        return interaction.reply({ embeds: [embed], ephemeral: true });
+                        return interaction.editReply({ embeds: [embed] });
                     }
                     const embed = new EmbedBuilder().setColor('#00FF00').setTitle('✅ Task Added').setDescription(`Task **#${this.lastID}**: \`${taskDescription}\``)
                         .addFields(
                             { name: 'Created By', value: interaction.user.tag, inline: true },
                             { name: 'Status', value: 'Pending', inline: true }
                         ).setTimestamp();
-                    interaction.reply({ embeds: [embed] });
+                    interaction.editReply({ embeds: [embed] });
                 }
             );
             break;
@@ -74,7 +76,7 @@ export async function execute(interaction) {
 
         case 'complete': {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-                return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+                return interaction.editReply({ content: 'You do not have permission to use this command.' });
             }
 
             const taskId = interaction.options.getInteger('task_id');
@@ -84,20 +86,20 @@ export async function execute(interaction) {
             db.get(`SELECT * FROM admin_tasks WHERE id = ? AND guild_id = ?`, [taskId, guildId], async (err, row) => {
                 if (err) {
                     console.error('Error fetching task:', err.message);
-                    return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error checking task: ${err.message}`)], ephemeral: true });
+                    return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error checking task: ${err.message}`)] });
                 }
-                if (!row) return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`❌ Task ID **#${taskId}** not found.`)], ephemeral: true });
-                if (row.status === 'completed') return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`⚠️ Task **#${taskId}** is already completed.`)], ephemeral: true });
+                if (!row) return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`❌ Task ID **#${taskId}** not found.`)] });
+                if (row.status === 'completed') return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`⚠️ Task **#${taskId}** is already completed.`)] });
 
                 db.run(`UPDATE admin_tasks SET status = 'completed', completedAt = ?, completedBy = ? WHERE id = ?`,
                     [Date.now(), userId, taskId],
                     (updateErr) => {
                         if (updateErr) {
                             console.error('Error updating task:', updateErr.message);
-                            return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error completing task: ${updateErr.message}`)], ephemeral: true });
+                            return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error completing task: ${updateErr.message}`)] });
                         }
                         const embed = new EmbedBuilder().setColor('#00FF00').setTitle('✅ Task Completed').setDescription(`Task **#${taskId}**: \`${row.taskDescription}\` marked completed by ${interaction.user.tag}.`).setTimestamp();
-                        interaction.reply({ embeds: [embed] });
+                        interaction.editReply({ embeds: [embed] });
                     }
                 );
             });
@@ -106,7 +108,7 @@ export async function execute(interaction) {
 
         case 'list': {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
-                return interaction.reply({ content: 'You do not have permission to use this command.', ephemeral: true });
+                return interaction.editReply({ content: 'You do not have permission to use this command.' });
             }
 
             let statusFilter = interaction.options.getString('status') || 'pending';
@@ -114,14 +116,14 @@ export async function execute(interaction) {
             if (statusFilter === 'all') {
                 queryStatus = '%';
             } else if (!['pending', 'completed', 'in-progress'].includes(statusFilter)) {
-                return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription("❌ Invalid status. Use `pending`, `completed`, `in-progress`, or `all`.")], ephemeral: true });
+                return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription("❌ Invalid status. Use `pending`, `completed`, `in-progress`, or `all`.")] });
             }
 
             const query = `SELECT * FROM admin_tasks WHERE guild_id = ? AND status LIKE ? ORDER BY createdAt DESC`;
             db.all(query, [interaction.guild.id, queryStatus], async (err, rows) => {
                 if (err) {
                     console.error('Error fetching tasks:', err.message);
-                    return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error fetching tasks: ${err.message}`)], ephemeral: true });
+                    return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription(`❌ Error fetching tasks: ${err.message}`)] });
                 }
 
                 const embedTitle = `📋 Admin Tasks (${statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)})`;
@@ -144,17 +146,17 @@ export async function execute(interaction) {
                         }
 
                         let assigneeTag = '';
-                        if(row.assigneeId) {
+                        if (row.assigned_to) {
                             try {
-                                const user = await interaction.client.users.fetch(row.assigneeId);
+                                const user = await interaction.client.users.fetch(row.assigned_to);
                                 assigneeTag = ` | Assigned: ${user.tag}`;
                             } catch (fetchErr) {
-                                console.warn(`Could not fetch assignee user ${row.assigneeId}:`, fetchErr.message);
+                                console.warn(`Could not fetch assignee user ${row.assigned_to}:`, fetchErr.message);
                             }
                         }
 
                         let completedByTag = '';
-                        if(row.completedBy) {
+                        if (row.completedBy) {
                             try {
                                 const user = await interaction.client.users.fetch(row.completedBy);
                                 completedByTag = ` by ${user.tag}`;
@@ -176,7 +178,7 @@ export async function execute(interaction) {
                     }
                     embed.setDescription(taskDescriptions.join('\n\n'));
                 }
-                interaction.reply({ embeds: [embed] });
+                interaction.editReply({ embeds: [embed] });
             });
             break;
         }

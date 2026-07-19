@@ -5,7 +5,7 @@ export const data = new SlashCommandBuilder()
     .setDescription('Sets your birthday (YYYY/MM/DD) for announcements.')
     .addStringOption(option =>
         option.setName('date')
-            .setDescription('Your birthday in YYYY/MM/DD format (e.g. 05/20/2000 AD)')
+            .setDescription('Your birthday in YYYY/MM/DD format (e.g. 2000/05/20)')
             .setRequired(true))
     .setDMPermission(false); 
 
@@ -18,7 +18,7 @@ export async function execute(interaction) {
     const parts = dateString.split('/');
     
     if (parts.length < 2 || parts.length > 3) {
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`❌ Invalid date format. Please use MM/DD or MM/DD/YYYY.`)], ephemeral: true });
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FFC107').setDescription(`❌ Invalid date format. Please use YYYY/MM/DD or YYYY/MM.`)], ephemeral: true });
     }
 
     const month = parseInt(parts[1]);

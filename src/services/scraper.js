@@ -379,6 +379,13 @@ export async function scrapePcampusNotice() {
             const date        = item.find(".post-date").text().trim();
 
             if (!pageLink) return;
+            if (date) {
+                const parsedDate = new Date(date);
+                if (!isNaN(parsedDate.getTime())) {
+                    const ageInDays = (Date.now() - parsedDate.getTime()) / 86_400_000;
+                    if (ageInDays > MAX_AGE_DAYS) return;
+                }
+            }
 
             const detailPromise = (async () => {
                 try {

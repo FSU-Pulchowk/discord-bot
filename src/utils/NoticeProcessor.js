@@ -27,7 +27,8 @@ class NoticeProcessor {
         this.client = client;
         this.debugConfig = debugConfig;
         this.colors = colors;
-        
+        this._isRunning = false;
+
         // Limits & Constants
         this.MAX_FILE_SIZE = 25 * 1024 * 1024; // Individual file boundary (25 MB)
         this.MAX_TOTAL_ATTACHMENT_SIZE = 25 * 1024 * 1024; // Consolidated payload limit (25 MB)
@@ -44,6 +45,14 @@ class NoticeProcessor {
      * @returns {Promise<void>}
      */
     async checkAndAnnounceNotices() {
+        if (this._isRunning) {
+            this.debugConfig.log(
+                'Notice check already in progress — skipping this invocation.',
+                'scheduler', null, null, 'warn'
+            );
+            return;
+        }
+        this._isRunning = true;
         this.debugConfig.log('Starting enhanced notice check...', 'scheduler');
 
         const TARGET_NOTICE_CHANNEL_ID = process.env.TARGET_NOTICE_CHANNEL_ID;
@@ -124,7 +133,7 @@ class NoticeProcessor {
                 await this.sendAdminAlert(adminChannel, `Critical notice scraping error: ${error.message}`);
             }
         } finally {
-            // Ultimate fallback to clean up the shared parent container directory
+            this._isRunning = false;
             await this.cleanupTempDirectory(TEMP_PARENT_DIR);
         }
     }
@@ -162,12 +171,11 @@ class NoticeProcessor {
             );
 
             noticeEmbed.setDescription(description);
-            
-            // Deliver embed and linked media to the targeted Discord server channel
+            await this.saveNoticeToDatabase(notice);
+
             await this.sendNoticeWithChunkedAttachments(
                 noticeChannel, noticeEmbed, attachments, notice.title
             );
-            await this.saveNoticeToDatabase(notice);
 
             this.debugConfig.log(
                 `Successfully announced notice: ${notice.title}`,

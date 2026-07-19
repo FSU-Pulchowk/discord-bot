@@ -27,9 +27,8 @@ export async function execute(interaction) {
     const dbGet = promisify(db.get).bind(db);
     const dbAll = promisify(db.all).bind(db);
 
-    const isModerator = interaction.member.permissions.has(
-        PermissionsBitField.Flags.KickMembers || PermissionsBitField.Flags.BanMembers
-    );
+    const isModerator = interaction.member.permissions.has(PermissionsBitField.Flags.KickMembers) ||
+                        interaction.member.permissions.has(PermissionsBitField.Flags.BanMembers);
 
     const hasVerifiedRole = interaction.member.roles.cache.has(VERIFIED_ROLE_ID);
 
