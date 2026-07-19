@@ -16,8 +16,6 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
 COPY --chown=botuser:botuser package*.json ./
 
 USER botuser
