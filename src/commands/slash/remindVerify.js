@@ -31,7 +31,7 @@ export const data = new SlashCommandBuilder()
  * Adjust this if you still face issues, but be cautious with lower values.
  * @type {number}
  */
-const DM_SEND_DELAY_MS = 3000; 
+const DM_SEND_DELAY_MS = 3000;
 
 /**
  * Executes the /remindverify slash command.
@@ -94,73 +94,73 @@ export async function execute(interaction) {
         return interaction.editReply({ content: '✅ No unverified members found in the server at this time.' });
     }
 
-    let sentCount = 0;
-    let failedCount = 0;
-    const failedUsers = [];
-
-    const reminderEmbed = new EmbedBuilder()
-        .setColor('#FFA500')
-        .setTitle('🔔 Verification Reminder!')
-        .setDescription('It looks like you haven\'t completed your verification yet. To gain full access to the server\'s channels, please complete the verification process.')
-        .addFields(
-            { name: 'How to Verify:', value: 'Please use the `/verify` command in any channel (or in my DMs) and follow the instructions. If you already started, you can use `/confirmotp` with your code.' },
-            { name: 'Need Help?', value: 'If you encounter any issues, please reach out to an administrator in the server.' }
-        )
-        .setTimestamp();
-
-    if (customMessage) {
-        reminderEmbed.addFields({ name: 'Important Note:', value: customMessage });
-    }
-
-    for (const member of unverifiedMembers.values()) {
-        const verifyButton = new ButtonBuilder()
-            .setCustomId(`verify_start_button_${member.user.id}`)
-            .setLabel('Verify Your Account')
-            .setStyle(ButtonStyle.Primary);
-        const actionRow = new ActionRowBuilder().addComponents(verifyButton);
-
-        try {
-            await member.send({ embeds: [reminderEmbed], components: [actionRow] });
-            sentCount++;
-            console.log(`[DM Sent] Sent verification reminder to ${member.user.tag} (${member.user.id}).`);
-        } catch (error) {
-            console.warn(`[DM Failed] Failed to send verification reminder DM to ${member.user.tag} (${member.user.id}):`, error.message);
-            failedCount++;
-            failedUsers.push(member.user.tag);
-        }
-        await new Promise(resolve => setTimeout(resolve, DM_SEND_DELAY_MS));
-    }
-
-
-    let replyContent = `✅ Sent **${sentCount}** verification reminders.`;
-    if (failedCount > 0) {
-        replyContent += `\n❌ Failed to send **${failedCount}** reminders (users might have DMs disabled or blocked the bot). Failed users: ${failedUsers.slice(0, 5).join(', ')}${failedUsers.length > 5 ? '...' : ''}`;
-    }
-
-    await interaction.editReply({ content: replyContent });
-
     const NOTICE_ADMIN_CHANNEL_ID = process.env.NOTICE_ADMIN_CHANNEL_ID;
+    let replyMsg = `⏳ Starting to send verification reminders to **${unverifiedMembers.size}** unverified members in the background.`;
     if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
-        try {
-            const adminLogChannel = await interaction.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
-            if (adminLogChannel && (adminLogChannel.type === ChannelType.GuildText || adminLogChannel.type === ChannelType.GuildAnnouncement)) {
-                const logEmbed = new EmbedBuilder()
-                    .setColor('#007BFF')
-                    .setTitle('Verification Reminders Sent')
-                    .setDescription(`**${interaction.user.tag}** sent verification reminders.`)
-                    .addFields(
-                        { name: 'Total Unverified', value: unverifiedMembers.size.toString(), inline: true },
-                        { name: 'Reminders Sent', value: sentCount.toString(), inline: true },
-                        { name: 'Reminders Failed', value: failedCount.toString(), inline: true }
-                    )
-                    .setTimestamp();
-                if (failedUsers.length > 0) {
-                    logEmbed.addFields({ name: 'Failed Users (Sample)', value: failedUsers.slice(0, 10).join(', ') });
-                }
-                await adminLogChannel.send({ embeds: [logEmbed] }).catch(e => console.error("Error sending admin log for reminders:", e));
-            }
-        } catch (logError) {
-            console.error('Error fetching or sending to admin log channel:', logError);
-        }
+        replyMsg += `\n📊 A complete summary will be posted in the admin log channel (<#${NOTICE_ADMIN_CHANNEL_ID}>) when finished.`;
     }
+    await interaction.editReply({ content: replyMsg });
+
+    (async () => {
+        let sentCount = 0;
+        let failedCount = 0;
+        const failedUsers = [];
+
+        const reminderEmbed = new EmbedBuilder()
+            .setColor('#FFA500')
+            .setTitle('🔔 Verification Reminder!')
+            .setDescription('It looks like you haven\'t completed your verification yet. To gain full access to the server\'s channels, please complete the verification process.')
+            .addFields(
+                { name: 'How to Verify:', value: 'Please use the `/verify` command in any channel (or in my DMs) and follow the instructions. If you already started, you can use `/confirmotp` with your code.' },
+                { name: 'Need Help?', value: 'If you encounter any issues, please reach out to an administrator in the server.' }
+            )
+            .setTimestamp();
+
+        if (customMessage) {
+            reminderEmbed.addFields({ name: 'Important Note:', value: customMessage });
+        }
+
+        for (const member of unverifiedMembers.values()) {
+            const verifyButton = new ButtonBuilder()
+                .setCustomId(`verify_start_button_${member.user.id}`)
+                .setLabel('Verify Your Account')
+                .setStyle(ButtonStyle.Primary);
+            const actionRow = new ActionRowBuilder().addComponents(verifyButton);
+
+            try {
+                await member.send({ embeds: [reminderEmbed], components: [actionRow] });
+                sentCount++;
+                console.log(`[DM Sent] Sent verification reminder to ${member.user.tag} (${member.user.id}).`);
+            } catch (error) {
+                console.warn(`[DM Failed] Failed to send verification reminder DM to ${member.user.tag} (${member.user.id}):`, error.message);
+                failedCount++;
+                failedUsers.push(member.user.tag);
+            }
+            await new Promise(resolve => setTimeout(resolve, DM_SEND_DELAY_MS));
+        }
+
+        if (NOTICE_ADMIN_CHANNEL_ID && NOTICE_ADMIN_CHANNEL_ID !== 'YOUR_NOTICE_ADMIN_CHANNEL_ID_HERE') {
+            try {
+                const adminLogChannel = await interaction.client.channels.fetch(NOTICE_ADMIN_CHANNEL_ID);
+                if (adminLogChannel && (adminLogChannel.type === ChannelType.GuildText || adminLogChannel.type === ChannelType.GuildAnnouncement)) {
+                    const logEmbed = new EmbedBuilder()
+                        .setColor('#007BFF')
+                        .setTitle('Verification Reminders Sent')
+                        .setDescription(`Background verification reminders started by **${interaction.user.tag}** have completed.`)
+                        .addFields(
+                            { name: 'Total Unverified', value: unverifiedMembers.size.toString(), inline: true },
+                            { name: 'Reminders Sent', value: sentCount.toString(), inline: true },
+                            { name: 'Reminders Failed', value: failedCount.toString(), inline: true }
+                        )
+                        .setTimestamp();
+                    if (failedUsers.length > 0) {
+                        logEmbed.addFields({ name: 'Failed Users (Sample)', value: failedUsers.slice(0, 10).join(', ') });
+                    }
+                    await adminLogChannel.send({ embeds: [logEmbed] }).catch(e => console.error("Error sending admin log for reminders:", e));
+                }
+            } catch (logError) {
+                console.error('Error fetching or sending to admin log channel:', logError);
+            }
+        }
+    })();
 }

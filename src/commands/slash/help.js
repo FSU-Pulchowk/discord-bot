@@ -36,13 +36,14 @@ export async function execute(interaction) {
         const moderationCommands = [];
         const suggestionModeration = [];
         const verificationCommands = [];
+        const clubCommands = [];
 
         commands.forEach(cmd => {
             const cmdName = cmd.data.name;
             const cmdDescription = cmd.data.description;
             const cmdLine = `\`/${cmdName}\` - ${cmdDescription}`;
 
-            if (['help', 'mystats', 'topchatters', 'topvoice', 'links', 'news', 'holidays', 'suggest'].includes(cmdName)) {
+            if (['help', 'mystats', 'topchatters', 'topvoice', 'links', 'news', 'holidays', 'suggest', 'repu', 'checknotices'].includes(cmdName)) {
                 generalCommands.push(cmdLine);
             } 
             else if (['setbirthday', 'removebirthday', 'getfaq'].includes(cmdName)) {
@@ -51,22 +52,25 @@ export async function execute(interaction) {
             else if (['verify', 'confirmotp'].includes(cmdName)) {
                 verificationCommands.push(cmdLine);
             }
-            else if (['setupfsu', 'setreactionrole', 'removereactionrole', 'setwelcome', 'setantispam', 'viewantispam'].includes(cmdName)) {
+            else if (['clubs', 'registerclub', 'clubmember', 'clubmod', 'announce', 'createevent', 'exportevent', 'transferpresident', 'clubaudit', 'fixclubperms', 'managetrusted'].includes(cmdName)) {
+                clubCommands.push(cmdLine);
+            }
+            else if (['setupfsu', 'setreactionrole', 'removereactionrole', 'setwelcome', 'setantispam', 'viewantispam', 'remindverify'].includes(cmdName)) {
                 if (isModerator || isAdmin) {
                     adminSetupConfig.push(cmdLine);
                 }
             } 
-            else if (['addfaq', 'removefaq', 'addtask', 'completetask', 'listtasks'].includes(cmdName)) {
+            else if (['addfaq', 'removefaq', 'task'].includes(cmdName)) {
                 if (isModerator || isAdmin) {
                     adminTasksFaq.push(cmdLine);
                 }
             }
-            else if (['assignrole', 'removerole', 'allroles', 'timeout', 'warn', 'kick', 'ban'].includes(cmdName)) {
+            else if (['assignrole', 'removerole', 'allroles', 'timeout', 'warn', 'kick', 'ban', 'clean'].includes(cmdName)) {
                 if (isModerator || isAdmin) {
                     moderationCommands.push(cmdLine);
                 }
             }
-            else if (['listsuggestions', 'approvesuggestion', 'denysuggestion', 'nuke', 'gotverified'].includes(cmdName)) {
+            else if (['listsuggestions', 'approvesuggestion', 'denysuggestion', 'gotverified', 'pingintersect'].includes(cmdName)) {
                 if (isModerator || isAdmin) {
                     suggestionModeration.push(cmdLine);
                 }
@@ -76,6 +80,7 @@ export async function execute(interaction) {
         if (generalCommands.length > 0) helpEmbed.addFields({ name: '✨ General Commands', value: generalCommands.sort().join('\n'), inline: false });
         if (utilityCommands.length > 0) helpEmbed.addFields({ name: '🛠️ Utility Commands', value: utilityCommands.sort().join('\n'), inline: false });
         if (verificationCommands.length > 0) helpEmbed.addFields({ name: '✅ Verification Commands', value: verificationCommands.sort().join('\n'), inline: false });
+        if (clubCommands.length > 0) helpEmbed.addFields({ name: '🏛️ Club Commands', value: clubCommands.sort().join('\n'), inline: false });
         if (adminSetupConfig.length > 0) helpEmbed.addFields({ name: '⚙️ Setup & Configuration (Moderator/Admin Only)', value: adminSetupConfig.sort().join('\n'), inline: false }); 
         if (adminTasksFaq.length > 0) helpEmbed.addFields({ name: '📝 Admin Tasks & FAQs (Moderator/Admin Only)', value: adminTasksFaq.sort().join('\n'), inline: false }); 
         if (moderationCommands.length > 0) helpEmbed.addFields({ name: '🛡️ Moderation Commands (Moderator/Admin Only)', value: moderationCommands.sort().join('\n'), inline: false }); 
