@@ -6,7 +6,8 @@ import {
     ChannelType,
     ActionRowBuilder,
     ButtonBuilder,
-    ButtonStyle
+    ButtonStyle,
+    Collection
 } from 'discord.js';
 import dotenv from 'dotenv';
 
@@ -68,10 +69,27 @@ export async function execute(interaction) {
 
     let members;
     try {
-        members = await targetGuild.members.fetch();
+        const allMembers = new Collection();
+        let lastId = undefined;
+
+        while (true) {
+            const options = { limit: 1000, cache: false };
+            if (lastId) options.after = lastId;
+
+            const page = await targetGuild.members.list(options);
+            if (page.size === 0) break;
+
+            for (const [id, member] of page) {
+                allMembers.set(id, member);
+            }
+            if (page.size < 1000) break;
+            lastId = page.last().id;
+        }
+
+        members = allMembers;
     } catch (error) {
         console.error(`Error fetching members for guild ${GUILD_ID}:`, error);
-        return interaction.editReply({ content: '❌ Could not fetch members from the main guild. Please ensure the bot has the "Guild Members Intent" enabled and sufficient permissions.' });
+        return interaction.editReply({ content: '❌ Could not fetch members from the main guild. Please ensure the bot has sufficient permissions.' });
     }
 
     let unverifiedMembers = members.filter(member =>

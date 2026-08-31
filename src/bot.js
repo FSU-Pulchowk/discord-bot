@@ -858,15 +858,15 @@ class PulchowkBot {
         const customId = interaction.customId;
         if (!customId.startsWith('gotverified_')) return false;
 
+        await this._ensureDeferred(interaction, true);
+
         if (!interaction.member?.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-            await this._safeReply(interaction, {
+            await interaction.editReply({
                 content: '⚠️ You do not have permission to view this list.',
-                flags: MessageFlags.Ephemeral
+                components: []
             });
             return true;
         }
-
-        await this._ensureDeferred(interaction, true);
 
         const parts = customId.split('_');
         const action = parts[1];
@@ -875,7 +875,8 @@ class PulchowkBot {
 
         if (interaction.user.id !== originalUserId) {
             await interaction.editReply({
-                content: '⚠️ You cannot control someone else\'s verification list.'
+                content: '⚠️ You cannot control someone else\'s verification list.',
+                components: []
             });
             return true;
         }
