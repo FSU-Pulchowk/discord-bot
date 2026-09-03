@@ -1,10 +1,10 @@
 FROM node:22-slim
 
-RUN groupadd -r -g 1001 botuser && useradd -r -u 1001 -g botuser -d /app -s /bin/bash botuser
+RUN groupadd -r botuser && useradd -r -g botuser -d /app -s /bin/bash botuser
 
 WORKDIR /app
 
-RUN mkdir -p /app/data && chown -R botuser:botuser /app/data
+RUN chown -R botuser:botuser /app
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
