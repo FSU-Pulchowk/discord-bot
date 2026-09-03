@@ -66,7 +66,7 @@ export async function renderGotVerifiedPage(interaction, allRows, page, original
             .setDisabled(page === totalPages - 1)
     );
 
-    return { embeds: [embed], components: [row], ephemeral: true };
+    return { embeds: [embed], components: [row] };
 }
 
 /**
