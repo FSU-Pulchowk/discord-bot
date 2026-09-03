@@ -40,6 +40,7 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { debugConfig } from './utils/debug.js';
+import { setupBotPresence } from './utils/presence.js';
 
 dotenv.config();
 
@@ -268,7 +269,7 @@ class PulchowkBot {
 
         this.client.once(Events.ClientReady, async c => {
             this.debugConfig.log(`Bot is ready! Logged in as ${c.user.tag}`, 'client', { userId: c.user.id });
-            c.user.setActivity('Managing FSU Pulchowk clubs', { type: 'WATCHING' });
+            await setupBotPresence(this.client);
 
             try {
                 this.noticeProcessor = new NoticeProcessor(this.client, this.debugConfig, this.colors);
