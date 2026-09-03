@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:22-slim
 
 RUN groupadd -r botuser && useradd -r -g botuser -d /app -s /bin/bash botuser
 

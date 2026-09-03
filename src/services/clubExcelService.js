@@ -1,5 +1,5 @@
 // src/services/clubExcelService.js
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { db } from '../database.js';
@@ -36,9 +36,7 @@ class ClubExcelService {
             await this.updateSyncStatus(syncType, 'in_progress', filePath);
             
             // Read Excel file
-            const workbook = await this.readExcelFile(filePath);
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const data = XLSX.utils.sheet_to_json(worksheet);
+            const data = await this.readExcelFile(filePath);
             
             if (data.length === 0) {
                 log(`No data found in Excel file for ${syncType}`, 'club', null, null, 'warn');
@@ -104,12 +102,36 @@ class ClubExcelService {
     }
 
     /**
-     * Read Excel file and return workbook
+     * Read Excel file and return rows as an array of objects
+     * @param {string} filePath - Path to Excel file
+     * @returns {Promise<Array<object>>}
      */
     async readExcelFile(filePath) {
         try {
-            const buffer = await fs.readFile(filePath);
-            return XLSX.read(buffer, { type: 'buffer' });
+            const workbook = new ExcelJS.Workbook();
+            await workbook.xlsx.readFile(filePath);
+
+            const worksheet = workbook.worksheets[0];
+            if (!worksheet) return [];
+
+            const rows = [];
+            let headers = [];
+
+            worksheet.eachRow((row, rowNumber) => {
+                const values = row.values.slice(1); // exceljs uses 1-based index; slot 0 is always undefined
+                if (rowNumber === 1) {
+                    headers = values.map(v => (v?.text ?? v ?? '').toString().trim());
+                } else {
+                    const obj = {};
+                    headers.forEach((header, i) => {
+                        const cell = values[i];
+                        obj[header] = cell?.text ?? cell ?? null;
+                    });
+                    rows.push(obj);
+                }
+            });
+
+            return rows;
         } catch (error) {
             throw new Error(`Failed to read Excel file: ${error.message}`);
         }
@@ -547,11 +569,15 @@ class ClubExcelService {
                     throw new Error('Unknown export type');
             }
 
-            const worksheet = XLSX.utils.json_to_sheet(data);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, exportType);
-            
-            XLSX.writeFile(workbook, outputPath);
+            const workbook = new ExcelJS.Workbook();
+            const worksheet = workbook.addWorksheet(exportType);
+
+            if (data.length > 0) {
+                worksheet.columns = Object.keys(data[0]).map(key => ({ header: key, key }));
+                data.forEach(row => worksheet.addRow(row));
+            }
+
+            await workbook.xlsx.writeFile(outputPath);
             
             log(`Exported ${exportType} to ${outputPath}`, 'club');
             return { success: true, path: outputPath, rows: data.length };
