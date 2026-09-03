@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   fsu-discord-bot:
     container_name: fsu-discord-bot
