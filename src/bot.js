@@ -16,8 +16,6 @@ import {
     TextInputBuilder,
     TextInputStyle
 } from 'discord.js';
-import { REST } from '@discordjs/rest';
-import { Routes } from 'discord-api-types/v9';
 import dotenv from 'dotenv';
 import schedule from 'node-schedule';
 import { initializeDatabase, db } from './database.js';
@@ -271,12 +269,12 @@ class PulchowkBot {
 
         this.client.once(Events.ClientReady, async c => {
             this.debugConfig.log(`Bot is ready! Logged in as ${c.user.tag}`, 'client', { userId: c.user.id });
+            console.log('Connected guilds:', c.guilds.cache.map(guild => `${guild.name} (${guild.id})`));
             await setupBotPresence(this.client);
 
             try {
                 this.noticeProcessor = new NoticeProcessor(this.client, this.debugConfig, this.colors);
                 this.debugConfig.log('NoticeProcessor initialized successfully', 'client', null, null, 'success');
-                await this._registerSlashCommands();
                 this._scheduleJobs();
                 await this._loadActiveVoiceSessions();
                 initializeGoogleCalendarClient();
@@ -326,133 +324,6 @@ class PulchowkBot {
                 this.debugConfig.log(`Error in ${eventName} handler:`, 'event', { eventName }, error, 'error');
             }
         };
-    }
-
-    /**
-     * Registers slash commands with Discord API
-     * @private
-     */
-    async _registerSlashCommands() {
-        const token = this.token;
-        const clientId = process.env.CLIENT_ID;
-
-        if (!token || !clientId) {
-            const error = new Error('BOT_TOKEN or CLIENT_ID missing from environment variables');
-            this.debugConfig.log('Cannot register commands: missing credentials', 'command', null, error, 'error');
-            throw error;
-        }
-
-        if (this.commandFiles.length === 0) {
-            this.debugConfig.log('No commands to register - command files array is empty', 'command', null, null, 'warn');
-            return;
-        }
-
-        const rest = new REST({ version: '10', timeout: 60000 }).setToken(token);
-
-
-        this.debugConfig.log(
-            `🌍 Registering ${this.commandFiles.length} commands globally...`,
-            'command',
-            { count: this.commandFiles.length }
-        );
-
-        const maxRetries = 3;
-        let lastError;
-
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                this.debugConfig.log(`Registration attempt ${attempt}/${maxRetries}`, 'command');
-
-                const data = await rest.put(
-                    Routes.applicationCommands(clientId),
-                    { body: this.commandFiles }
-                );
-
-                this.debugConfig.log(
-                    `✅ Successfully registered ${data.length} global slash commands`,
-                    'command',
-                    { registered: data.map(c => c.name) },
-                    null,
-                    'success'
-                );
-
-                console.log(`\n🎉 ${data.length} commands registered globally`);
-                console.log('⏰ Note: Global commands take up to 1 hour to propagate to all servers\n');
-
-                return;
-
-            } catch (error) {
-                lastError = error;
-
-                this.debugConfig.log(
-                    `Registration attempt ${attempt} failed`,
-                    'command',
-                    {
-                        attempt,
-                        maxRetries,
-                        errorCode: error.code,
-                        errorMessage: error.message,
-                        errorName: error.name,
-                        statusCode: error.status
-                    },
-                    error,
-                    'error'
-                );
-
-                if (error.code === 50035) {
-                    if (error.rawError?.errors) {
-                        console.error('Command validation errors:', JSON.stringify(error.rawError.errors, null, 2));
-                    }
-                    throw error; // Invalid structure — no point retrying
-                }
-
-                if (error.code === 401) {
-                    throw new Error('Invalid BOT_TOKEN - authentication failed');
-                }
-
-                if (error.code === 429 || error.status === 429) {
-                    const retryAfter = error.retry_after || error.retryAfter || 5000;
-                    this.debugConfig.log(`Rate limited. Waiting ${retryAfter}ms...`, 'command', null, null, 'warn');
-                    await new Promise(resolve => setTimeout(resolve, retryAfter));
-                    continue;
-                }
-
-                if (attempt < maxRetries) {
-                    const delay = Math.min(5000 * attempt, 15000);
-                    this.debugConfig.log(`Waiting ${delay}ms before retry...`, 'command');
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-            }
-        }
-
-        throw new Error(`Failed to register commands after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
-    }
-    /**
-    * helper method to force refresh commands (useful for debugging)
-    * @private
-    */
-    async _forceRefreshCommands() {
-        this.debugConfig.log('Force refreshing commands...', 'command');
-
-        const rest = new REST({ version: '10' }).setToken(this.token);
-        const clientId = process.env.CLIENT_ID;
-
-        try {
-            // Clear all global commands
-            await rest.put(Routes.applicationCommands(clientId), { body: [] });
-            this.debugConfig.log('Cleared all existing commands', 'command');
-
-            // Wait a moment
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            // Re-register
-            await this._registerSlashCommands();
-            this.debugConfig.log('Commands force-refreshed successfully', 'command', null, null, 'success');
-
-        } catch (error) {
-            this.debugConfig.log('Failed to force refresh commands', 'command', null, error, 'error');
-            throw error;
-        }
     }
 
     /**
