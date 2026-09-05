@@ -351,7 +351,7 @@ class PulchowkBot {
 
 
         this.debugConfig.log(
-            `🌍 Registering ${this.commandFiles.length} commands globally (this may take several minutes)...`,
+            `🌍 Registering ${this.commandFiles.length} commands globally...`,
             'command',
             { count: this.commandFiles.length }
         );
@@ -362,66 +362,22 @@ class PulchowkBot {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 this.debugConfig.log(`Registration attempt ${attempt}/${maxRetries}`, 'command');
-                const BATCH_SIZE = 25;
-                const batches = [];
 
-                for (let i = 0; i < this.commandFiles.length; i += BATCH_SIZE) {
-                    batches.push(this.commandFiles.slice(i, i + BATCH_SIZE));
-                }
-
-                if (batches.length > 1) {
-                    this.debugConfig.log(
-                        `Splitting ${this.commandFiles.length} commands into ${batches.length} batches`,
-                        'command'
-                    );
-                }
-
-                let allRegistered = [];
-
-                for (let i = 0; i < batches.length; i++) {
-                    const batch = batches[i];
-                    this.debugConfig.log(`Registering batch ${i + 1}/${batches.length} (${batch.length} commands)`, 'command');
-
-                    try {
-                        const data = await rest.put(
-                            Routes.applicationCommands(clientId),
-                            { body: batch }
-                        );
-
-                        allRegistered = allRegistered.concat(data);
-                        this.debugConfig.log(`✓ Batch ${i + 1} registered (${data.length} commands)`, 'command');
-
-                        // Wait between batches to avoid rate limits
-                        if (i < batches.length - 1) {
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-                        }
-
-                    } catch (batchError) {
-                        this.debugConfig.log(`Error in batch ${i + 1}`, 'command', null, batchError, 'error');
-                        throw batchError;
-                    }
-                }
+                const data = await rest.put(
+                    Routes.applicationCommands(clientId),
+                    { body: this.commandFiles }
+                );
 
                 this.debugConfig.log(
-                    `✅ Successfully registered ${allRegistered.length} application commands globally`,
+                    `✅ Successfully registered ${data.length} global slash commands`,
                     'command',
-                    { registered: allRegistered.map(c => c.name) },
+                    { registered: data.map(c => c.name) },
                     null,
                     'success'
                 );
 
-                console.log(`\n🎉 ${allRegistered.length} commands registered globally`);
-                console.log('⏰ Note: Global commands take up to 1 hour to propagate to all servers');
-                console.log('💡 For instant updates during development, set DEV_GUILD_ID in .env\n');
-
-                await new Promise(resolve => setTimeout(resolve, 3000));
-
-                const registeredCommands = await rest.get(Routes.applicationCommands(clientId));
-                this.debugConfig.log(
-                    `Verified ${registeredCommands.length} commands are now live on Discord`,
-                    'command',
-                    { commands: registeredCommands.map(c => c.name) }
-                );
+                console.log(`\n🎉 ${data.length} commands registered globally`);
+                console.log('⏰ Note: Global commands take up to 1 hour to propagate to all servers\n');
 
                 return;
 
@@ -444,19 +400,10 @@ class PulchowkBot {
                 );
 
                 if (error.code === 50035) {
-                    this.debugConfig.log(
-                        'Invalid command structure detected',
-                        'command',
-                        { error: error.message, rawError: error.rawError },
-                        error,
-                        'error'
-                    );
-
                     if (error.rawError?.errors) {
                         console.error('Command validation errors:', JSON.stringify(error.rawError.errors, null, 2));
                     }
-
-                    throw error;
+                    throw error; // Invalid structure — no point retrying
                 }
 
                 if (error.code === 401) {
@@ -468,10 +415,6 @@ class PulchowkBot {
                     this.debugConfig.log(`Rate limited. Waiting ${retryAfter}ms...`, 'command', null, null, 'warn');
                     await new Promise(resolve => setTimeout(resolve, retryAfter));
                     continue;
-                }
-
-                if (error.name === 'AbortError' || error.message?.includes('timeout')) {
-                    this.debugConfig.log('Request timed out', 'command', null, null, 'warn');
                 }
 
                 if (attempt < maxRetries) {
