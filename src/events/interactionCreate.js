@@ -323,6 +323,12 @@ export async function handleInteraction(interaction) {
                     await handleRegOtpButton(interaction);
                 }
 
+                // Got verified pagination buttons
+                else if (customId.startsWith('gotverified_')) {
+                    const { handleGotVerifiedButton } = await import('../commands/slash/gotVerified.js');
+                    await handleGotVerifiedButton(interaction);
+                }
+
                 else {
                     log(`Unhandled button: ${customId}`, 'interaction', null, null, 'warn');
                 }

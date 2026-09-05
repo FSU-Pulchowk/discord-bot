@@ -127,43 +127,46 @@ export async function execute(interaction) {
         });
     }
 
-    // ── Build ping chunks (Discord 2000-char message limit) ────────────────
-    const mentions = intersection.map(m => `<@${m.id}>`);
-    const intersectionUserIds = intersection.map(m => m.id);
-    const CHUNK_CHAR_LIMIT = 1900;
+    // ── Build ping messages (Discord character and mention limits) ────────
+    const roleNames = roles.map(r => `\`${r.name}\``).join(' ∩ ');
+    const headerLines = [];
+    if (customMessage) headerLines.push(`📢 **${customMessage}**`);
+    headerLines.push(`*Pinging **${intersection.size}** member(s) with all of: ${roleNames}*`);
+    const header = headerLines.join('\n');
 
-    const chunks = [];
-    let current = '';
+    const mentions = intersection.map(m => `<@${m.id}>`);
+    const CHUNK_CHAR_LIMIT = 1900;
+    const MAX_MENTIONS_PER_MESSAGE = 80;
+
+    const messages = [];
+    let currentContent = header + '\n\n';
+    let currentMentionCount = 0;
 
     for (const mention of mentions) {
-        if (current.length + mention.length + 1 > CHUNK_CHAR_LIMIT) {
-            chunks.push(current.trim());
-            current = mention + ' ';
+        if (
+            (currentContent.length + mention.length + 1 > CHUNK_CHAR_LIMIT) ||
+            (currentMentionCount >= MAX_MENTIONS_PER_MESSAGE)
+        ) {
+            if (currentContent.trim()) {
+                messages.push(currentContent.trim());
+            }
+            currentContent = mention + ' ';
+            currentMentionCount = 1;
         } else {
-            current += mention + ' ';
+            currentContent += mention + ' ';
+            currentMentionCount++;
         }
     }
-    if (current.trim()) chunks.push(current.trim());
+    if (currentContent.trim()) {
+        messages.push(currentContent.trim());
+    }
 
     // ── Send ping messages in the channel ─────────────────────────────────
     try {
-        const roleNames = roles.map(r => `\`${r.name}\``).join(' ∩ ');
-
-        const headerLines = [];
-        if (customMessage) headerLines.push(`📢 **${customMessage}**`);
-        headerLines.push(`*Pinging **${intersection.size}** member(s) with all of: ${roleNames}*`);
-
-        // First message: header + first chunk of mentions
-        await interaction.channel.send({
-            content: headerLines.join('\n') + '\n\n' + chunks[0],
-            allowedMentions: { users: intersectionUserIds }
-        });
-
-        // Any overflow chunks
-        for (let i = 1; i < chunks.length; i++) {
+        for (const messageContent of messages) {
             await interaction.channel.send({
-                content: chunks[i],
-                allowedMentions: { users: intersectionUserIds }
+                content: messageContent,
+                allowedMentions: { parse: ['users'] }
             });
         }
     } catch (err) {

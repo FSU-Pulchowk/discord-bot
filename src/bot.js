@@ -99,7 +99,9 @@ class PulchowkBot {
                 IntentsBitField.Flags.MessageContent,
                 IntentsBitField.Flags.GuildVoiceStates,
                 IntentsBitField.Flags.DirectMessages,
-                IntentsBitField.Flags.GuildMessageReactions
+                IntentsBitField.Flags.GuildMessageReactions,
+                IntentsBitField.Flags.AutoModerationConfiguration,
+                IntentsBitField.Flags.AutoModerationExecution
             ],
             partials: [
                 Partials.Channel,
@@ -333,7 +335,6 @@ class PulchowkBot {
     async _registerSlashCommands() {
         const token = this.token;
         const clientId = process.env.CLIENT_ID;
-        const guildId = process.env.GUILD_ID;
 
         if (!token || !clientId) {
             const error = new Error('BOT_TOKEN or CLIENT_ID missing from environment variables');
@@ -348,38 +349,6 @@ class PulchowkBot {
 
         const rest = new REST({ version: '10', timeout: 60000 }).setToken(token);
 
-        if (guildId && guildId !== 'YOUR_GUILD_ID_HERE') {
-            this.debugConfig.log(
-                `🚀 DEV MODE: Registering ${this.commandFiles.length} commands to guild ${guildId}...`,
-                'command',
-                { count: this.commandFiles.length, guildId }
-            );
-
-            try {
-                const data = await rest.put(
-                    Routes.applicationGuildCommands(clientId, guildId),
-                    { body: this.commandFiles }
-                );
-
-                this.debugConfig.log(
-                    `✅ Successfully registered ${data.length} guild commands (instant update!)`,
-                    'command',
-                    { registered: data.map(c => c.name) },
-                    null,
-                    'success'
-                );
-
-                console.log(`\n🎉 ${data.length} commands registered to guild ${guildId}`);
-                console.log('✨ Commands are available IMMEDIATELY in your server!');
-                console.log('💡 To register globally, remove DEV_GUILD_ID from .env\n');
-
-                return;
-
-            } catch (error) {
-                this.debugConfig.log('Failed to register guild commands', 'command', null, error, 'error');
-                throw error;
-            }
-        }
 
         this.debugConfig.log(
             `🌍 Registering ${this.commandFiles.length} commands globally (this may take several minutes)...`,

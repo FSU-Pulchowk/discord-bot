@@ -4,7 +4,8 @@ import {
     PermissionsBitField,
     ActionRowBuilder,
     ButtonBuilder,
-    ButtonStyle
+    ButtonStyle,
+    MessageFlags
 } from 'discord.js';
 
 const MAX_USERS_PER_PAGE = 10;
@@ -18,7 +19,7 @@ export const data = new SlashCommandBuilder()
  * Generates the paginated verified users embed & buttons
  */
 export async function renderGotVerifiedPage(interaction, allRows, page, originalUserId) {
-    const totalPages = Math.ceil(allRows.length / MAX_USERS_PER_PAGE);
+    const totalPages = Math.max(1, Math.ceil(allRows.length / MAX_USERS_PER_PAGE));
 
     const start = page * MAX_USERS_PER_PAGE;
     const end = start + MAX_USERS_PER_PAGE;
@@ -32,8 +33,7 @@ export async function renderGotVerifiedPage(interaction, allRows, page, original
             text: `Page ${page + 1} of ${totalPages} | Total Verified Users: ${allRows.length}`
         });
 
-    let description = '';
-    for (const row of paginatedRows) {
+    const userPromises = paginatedRows.map(async (row) => {
         let userTag = `ID: ${row.user_id}`;
         try {
             const user = interaction.client.users.cache.get(row.user_id) ||
@@ -44,12 +44,11 @@ export async function renderGotVerifiedPage(interaction, allRows, page, original
         } catch {
             // Ignore fetch errors
         }
-        description += `**${row.real_name}** (${userTag}) - \`${row.email}\`\n`;
-    }
+        return `**${row.real_name}** (${userTag}) - \`${row.email}\``;
+    });
 
-    if (!description) {
-        description = '*No verified users on this page.*';
-    }
+    const lines = await Promise.all(userPromises);
+    const description = lines.length > 0 ? lines.join('\n') : '*No verified users on this page.*';
 
     embed.setDescription(description);
 
@@ -63,10 +62,70 @@ export async function renderGotVerifiedPage(interaction, allRows, page, original
             .setCustomId(`gotverified_next_${page}_${originalUserId}`)
             .setLabel('Next')
             .setStyle(ButtonStyle.Primary)
-            .setDisabled(page === totalPages - 1)
+            .setDisabled(page >= totalPages - 1)
     );
 
     return { embeds: [embed], components: [row] };
+}
+
+/**
+ * Handles gotverified pagination buttons
+ */
+export async function handleGotVerifiedButton(interaction) {
+    const customId = interaction.customId;
+    if (!customId.startsWith('gotverified_')) return;
+
+    if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate().catch(() => {});
+    }
+
+    if (!interaction.member?.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+        await interaction.followUp({
+            content: '⚠️ You do not have permission to view this list.',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
+
+    const parts = customId.split('_');
+    const action = parts[1];
+    let currentPage = parseInt(parts[2], 10);
+    const originalUserId = parts[3];
+
+    if (interaction.user.id !== originalUserId) {
+        await interaction.followUp({
+            content: "⚠️ You cannot control someone else's verification list.",
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
+
+    const db = interaction.client.db;
+    if (!db) {
+        await interaction.followUp({
+            content: '❌ Database connection not established.',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
+
+    db.all(
+        `SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
+        [interaction.guild.id],
+        async (err, allRows) => {
+            if (err) {
+                console.error('Error in gotverified pagination:', err.message);
+                return;
+            }
+
+            const totalPages = Math.max(1, Math.ceil((allRows || []).length / MAX_USERS_PER_PAGE));
+            if (action === 'next') currentPage = Math.min(totalPages - 1, currentPage + 1);
+            if (action === 'prev') currentPage = Math.max(0, currentPage - 1);
+
+            const pageData = await renderGotVerifiedPage(interaction, allRows || [], currentPage, originalUserId);
+            await interaction.editReply(pageData);
+        }
+    );
 }
 
 /**
@@ -76,14 +135,14 @@ export async function execute(interaction) {
     if (!interaction.guild) {
         return interaction.reply({
             embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ This command can only be used in a server.')],
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
         return interaction.reply({
             content: '❌ You do not have permission to use this command.',
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
@@ -91,13 +150,13 @@ export async function execute(interaction) {
         console.error('Database connection not found on client.');
         return interaction.reply({
             embeds: [new EmbedBuilder().setColor('#FF0000').setDescription('❌ Database connection not established.')],
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
-    const db = interaction.client.db;
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+    const db = interaction.client.db;
     db.all(
         `SELECT user_id, real_name, email FROM verified_users WHERE guild_id = ? ORDER BY real_name ASC`,
         [interaction.guild.id],
@@ -109,7 +168,7 @@ export async function execute(interaction) {
                 });
             }
 
-            if (allRows.length === 0) {
+            if (!allRows || allRows.length === 0) {
                 return interaction.editReply({
                     embeds: [
                         new EmbedBuilder()
