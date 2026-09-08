@@ -29,15 +29,7 @@ const builder = new SlashCommandBuilder()
     .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild);
 
 
-// 1. Add except_them boolean option
-builder.addBooleanOption(option =>
-    option
-        .setName('except_them')
-        .setDescription('Want to ping members with the specified roles EXCEPT those having all of them?')
-        .setRequired(false)
-);
-
-// 2. Add required role slots FIRST
+// 1. Add required role slots FIRST
 for (let i = 1; i <= REQUIRED_ROLES; i++) {
     builder.addRoleOption(option =>
         option
@@ -47,7 +39,7 @@ for (let i = 1; i <= REQUIRED_ROLES; i++) {
     );
 }
 
-// 3. Add optional role slots SECOND
+// 2. Add optional role slots SECOND
 for (let i = REQUIRED_ROLES + 1; i <= REQUIRED_ROLES + OPTIONAL_ROLES; i++) {
     builder.addRoleOption(option =>
         option
@@ -57,7 +49,15 @@ for (let i = REQUIRED_ROLES + 1; i <= REQUIRED_ROLES + OPTIONAL_ROLES; i++) {
     );
 }
 
-// 4. Add optional message option LAST (optional options must follow required ones)
+// 3. Add except_them boolean option (optional)
+builder.addBooleanOption(option =>
+    option
+        .setName('except_them')
+        .setDescription('Want to ping members with the specified roles EXCEPT those having all of them?')
+        .setRequired(false)
+);
+
+// 4. Add optional message option LAST
 builder.addStringOption(option =>
     option
         .setName('message')
@@ -69,7 +69,6 @@ builder.addStringOption(option =>
 export const data = builder;
 
 export async function execute(interaction) {
-    // ── Permission checks ──────────────────────────────────────────────────
     if (!interaction.guild) {
         return interaction.reply({
             content: 'This command can only be used in a server.',
