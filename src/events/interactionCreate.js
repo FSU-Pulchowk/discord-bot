@@ -53,6 +53,16 @@ import {
 import { handleTransferApproval } from '../commands/slash/transferpresident.js';
 import { handleButtonInteraction as handleVerifyStartButton } from '../commands/slash/verify.js';
 import { handleRegOtpButton, handleRegOtpModal } from '../utils/nonVerifiedRegOtpHandlers.js';
+import {
+    handleAdCreateModal,
+    handleAdEditModal,
+    handleAdScheduleModal,
+    handleAdDeleteConfirm,
+    handleAdDeleteCancel,
+    handleAdDismiss,
+    handleAdListPage
+} from '../commands/slash/ad.js';
+import { maybeDeliverAdDm } from '../services/ads/adDelivery.js';
 
 export async function handleInteraction(interaction) {
     try {
@@ -72,6 +82,9 @@ export async function handleInteraction(interaction) {
 
             try {
                 await command.execute(interaction);
+                if (interaction.commandName !== 'ad') {
+                    maybeDeliverAdDm(interaction).catch(() => {});
+                }
             } catch (error) {
                 await handleCommandError(interaction, error);
             }
@@ -106,9 +119,6 @@ export async function handleInteraction(interaction) {
             const customId = interaction.customId;
 
             try {
-                // ✅ CRITICAL: Defer immediately to prevent timeout
-                // Modal submissions have 3 second window!
-
                 // Club registration modals
                 if (customId === 'club_registration_modal_step1') {
                     await handleRegisterStep1(interaction);
@@ -187,6 +197,25 @@ export async function handleInteraction(interaction) {
                     await handleRegOtpModal(interaction);
                 }
 
+                // Advertisement Engine modals
+                else if (customId === 'ad_create_modal') {
+                    await handleAdCreateModal(interaction);
+                }
+                else if (customId.startsWith('ad_edit_modal_')) {
+                    const adId = customId.replace('ad_edit_modal_', '');
+                    await handleAdEditModal(interaction, adId);
+                }
+                else if (customId.startsWith('ad_schedule_modal_')) {
+                    const adId = customId.replace('ad_schedule_modal_', '');
+                    await handleAdScheduleModal(interaction, adId);
+                }
+
+                // Ping Intersect modal
+                else if (customId.startsWith('pingintersect_modal_')) {
+                    const { handlePingIntersectModal } = await import('../commands/slash/pingintersect.js');
+                    await handlePingIntersectModal(interaction);
+                }
+
                 else {
                     log(`Unhandled modal: ${customId}`, 'interaction', null, null, 'warn');
                 }
@@ -217,8 +246,6 @@ export async function handleInteraction(interaction) {
                     await handleEventRejection(interaction);
                 }
 
-                // ✅ FIX: More specific join club button check
-                // IMPORTANT: Check for 'join_club_' followed by numbers ONLY (not 'join_club_modal_')
                 else if (customId.startsWith('join_club_') && !customId.includes('modal')) {
                     await handleJoinClubButton(interaction);
                 }
@@ -329,6 +356,23 @@ export async function handleInteraction(interaction) {
                     await handleGotVerifiedButton(interaction);
                 }
 
+                // Advertisement Engine buttons
+                else if (customId.startsWith('ad_delete_confirm_')) {
+                    const adId = customId.replace('ad_delete_confirm_', '');
+                    await handleAdDeleteConfirm(interaction, adId);
+                }
+                else if (customId.startsWith('ad_delete_cancel_')) {
+                    await handleAdDeleteCancel(interaction);
+                }
+                else if (customId.startsWith('ad_dismiss_')) {
+                    const adId = customId.replace('ad_dismiss_', '');
+                    await handleAdDismiss(interaction, adId);
+                }
+                else if (customId.startsWith('ad_list_')) {
+                    const page = parseInt(customId.replace('ad_list_', ''), 10);
+                    await handleAdListPage(interaction, page);
+                }
+
                 else {
                     log(`Unhandled button: ${customId}`, 'interaction', null, null, 'warn');
                 }
@@ -350,14 +394,10 @@ export async function handleInteraction(interaction) {
  * Check if interaction has expired (e.g., after bot restart)
  */
 async function checkInteractionExpiry(interaction) {
-    // Interactions are typically invalid if they're from before bot started
-    // or the interaction token has expired (15 minutes from creation)
     try {
-        // If bot was started recently and interaction is old, it's likely expired
         const botUptime = process.uptime() * 1000; // Convert to milliseconds
         const interactionAge = Date.now() - interaction.createdTimestamp;
 
-        // If interaction is older than bot uptime, it's from before restart
         if (interactionAge > botUptime + 5000) { // 5s grace period
             log('Ignoring expired interaction from before bot restart', 'interaction', {
                 customId: interaction.customId || interaction.commandName,
@@ -369,7 +409,6 @@ async function checkInteractionExpiry(interaction) {
 
         return false;
     } catch (error) {
-        // If we can't determine, assume it's not expired
         return false;
     }
 }
@@ -378,7 +417,6 @@ async function checkInteractionExpiry(interaction) {
  * Handle command execution errors
  */
 async function handleCommandError(interaction, error) {
-    // Don't try to respond to expired or unknown interactions
     if (error.message?.includes('Unknown interaction') ||
         error.message?.includes('already been acknowledged') ||
         error.code === 10062 ||
@@ -401,7 +439,6 @@ async function handleCommandError(interaction, error) {
             await interaction.reply(errorMessage);
         }
     } catch (replyError) {
-        // Silently fail if we can't send error message
     }
 }
 
@@ -415,7 +452,7 @@ async function handleModalError(interaction, customId, error) {
         error.code === 10062 ||
         error.code === 40060) {
         log('Modal interaction expired (bot was likely restarted)', 'interaction', { customId }, null, 'warn');
-        return; // Silently ignore - user will need to start fresh
+        return;
     }
 
     log(`Error handling modal: ${customId}`, 'interaction', null, error, 'error');

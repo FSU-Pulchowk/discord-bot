@@ -39,6 +39,8 @@ async function initializeDatabase() {
                 createAdminTasksTable();
                 createModerationActionsTable();
                 createReputationTable();
+                createAdsTable();
+                createAdDeliveriesTable();
                 createModCooldownsTable();
                 createGuildStructureBackupsTable();
 
@@ -343,6 +345,64 @@ function createGuildStructureBackupsTable() {
     )`, (err) => {
         if (err) log('Error creating guild_structure_backups:', 'error', null, err, 'error');
         else log('✓ guild_structure_backups', 'init');
+    });
+}
+
+// ==================== ADVERTISEMENT TABLES ====================
+
+function createAdsTable() {
+    db.run(`CREATE TABLE IF NOT EXISTS ads (
+        id TEXT PRIMARY KEY,
+        guild_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        redirect_url TEXT,
+        image_url TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        type TEXT NOT NULL DEFAULT 'presence',
+        scope TEXT NOT NULL DEFAULT 'guild',
+        scope_target_id TEXT,
+        created_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        starts_at INTEGER,
+        expires_at INTEGER,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        metadata TEXT,
+        CHECK(priority IN ('low','normal','high','critical')),
+        CHECK(type IN ('presence','interaction','announcement')),
+        CHECK(scope IN ('global','guild','channel','role','user'))
+    )`, (err) => {
+        if (err) log('Error creating ads:', 'error', null, err, 'error');
+        else log('✓ ads', 'init');
+    });
+
+    db.run(`CREATE INDEX IF NOT EXISTS idx_ads_eligible
+        ON ads (deleted, enabled, type, starts_at, expires_at)`, (err) => {
+        if (err) log('Error creating ads index:', 'error', null, err, 'error');
+    });
+}
+
+function createAdDeliveriesTable() {
+    db.run(`CREATE TABLE IF NOT EXISTS ad_deliveries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        advertisement_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        guild_id TEXT,
+        delivery_type TEXT NOT NULL,
+        delivered_at INTEGER NOT NULL,
+        clicked_at INTEGER,
+        dismissed_at INTEGER,
+        CHECK(delivery_type IN ('presence','slash_command','dm','interaction'))
+    )`, (err) => {
+        if (err) log('Error creating ad_deliveries:', 'error', null, err, 'error');
+        else log('✓ ad_deliveries', 'init');
+    });
+
+    db.run(`CREATE INDEX IF NOT EXISTS idx_ad_deliveries_lookup
+        ON ad_deliveries (advertisement_id, user_id, delivery_type, delivered_at)`, (err) => {
+        if (err) log('Error creating ad_deliveries index:', 'error', null, err, 'error');
     });
 }
 

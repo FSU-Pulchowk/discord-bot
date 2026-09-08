@@ -279,6 +279,14 @@ class PulchowkBot {
             await setupBotPresence(this.client);
 
             try {
+                const { startAdScheduler } = await import('./services/ads/adScheduler.js');
+                startAdScheduler(this.client);
+                this.debugConfig.log('AdScheduler started', 'client', null, null, 'success');
+            } catch (adError) {
+                this.debugConfig.log('Error starting AdScheduler:', 'client', null, adError, 'error');
+            }
+
+            try {
                 this.noticeProcessor = new NoticeProcessor(this.client, this.debugConfig, this.colors);
                 this.debugConfig.log('NoticeProcessor initialized successfully', 'client', null, null, 'success');
                 this._scheduleJobs();
@@ -1098,7 +1106,19 @@ class PulchowkBot {
      * @private
      */
     async _onMessageCreate(message) {
-        if (message.author.bot || !message.guild) return;
+        if (message.author.bot) return;
+
+        // Handle DM messages (e.g. ad image upload sessions)
+        if (!message.guild) {
+            try {
+                const { handleImageUploadMessage } = await import('./services/ads/adManager.js');
+                const handled = await handleImageUploadMessage(message);
+                if (handled) return;
+            } catch (err) {
+                this.debugConfig.log('Error handling DM message in adManager', 'event', null, err, 'error');
+            }
+            return;
+        }
 
         try {
             await Promise.all([
