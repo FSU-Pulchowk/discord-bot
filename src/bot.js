@@ -27,6 +27,12 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { NoticeProcessor } from './utils/NoticeProcessor.js';
 import { detectSpam, matchesKnownSpamPattern } from './utils/spamDetector.js';
 import { handleRoleDelete, handleRoleUpdate } from './events/roleProtection.js';
+import {
+    cleanRecentUserMessagesDeduplicated,
+    cleanUserMessagesAcrossGuild,
+    assignServerBanRole,
+    LIGHT_BAN_ROLE_ID
+} from './utils/moderationUtils.js';
 
 import * as fs from 'fs';
 import { promises as fsPromises, createWriteStream } from 'fs';
@@ -303,6 +309,9 @@ class PulchowkBot {
         // Role Protection Events
         this.client.on(Events.GuildRoleDelete, this._safeEventHandler('GuildRoleDelete', handleRoleDelete));
         this.client.on(Events.GuildRoleUpdate, this._safeEventHandler('GuildRoleUpdate', handleRoleUpdate));
+
+        // Member Update Events (e.g. Server Ban Role assignment)
+        this.client.on(Events.GuildMemberUpdate, this._safeEventHandler('GuildMemberUpdate', this._onGuildMemberUpdate.bind(this)));
 
         this.client.on(Events.Error, error => this.debugConfig.log('Discord.js Client Error:', 'client', null, error, 'error'));
         this.client.on(Events.ShardDisconnect, (event, id) => this.debugConfig.log(`Shard ${id} Disconnected:`, 'client', { event }, null, 'warn'));
@@ -1239,6 +1248,36 @@ class PulchowkBot {
     }
 
     /**
+     * Guild member update handler.
+     * When server ban role is assigned to a user, deletes all messages from that user
+     * across all server channels sent within the past 24 hours.
+     * @private
+     */
+    async _onGuildMemberUpdate(oldMember, newMember) {
+        if (!oldMember || !newMember || !newMember.guild) return;
+
+        try {
+            const hadBanRole = oldMember.roles?.cache?.has(LIGHT_BAN_ROLE_ID);
+            const hasBanRole = newMember.roles?.cache?.has(LIGHT_BAN_ROLE_ID);
+
+            if (!hadBanRole && hasBanRole) {
+                this.debugConfig.log(
+                    `Server ban role assigned to ${newMember.user?.tag || newMember.id}. Purging messages across all channels within 24h...`,
+                    'moderation'
+                );
+                await cleanRecentUserMessagesDeduplicated(
+                    newMember.guild,
+                    newMember.id,
+                    24 * 60 * 60 * 1000,
+                    'Server ban role assigned: 24h message cleanup'
+                );
+            }
+        } catch (error) {
+            this.debugConfig.log('Error in GuildMemberUpdate handler:', 'event', { userId: newMember?.id }, error, 'error');
+        }
+    }
+
+    /**
      * Enhanced reaction add handler.
      * @private
      */
@@ -1570,83 +1609,19 @@ class PulchowkBot {
      */
     async _cleanSpammerMessages(userOrMember, guild) {
         const userId = userOrMember.id;
-        // Handle both User and GuildMember types
         const user = userOrMember.user || userOrMember;
         const userTag = user.tag || user.username || 'Unknown User';
 
         this.debugConfig.log(`Cleaning all messages from spammer: ${userTag}`, 'antispam', { userId, guildId: guild.id });
 
         try {
-            let totalDeleted = 0;
-            const channelsToCheck = guild.channels.cache.filter(channel =>
-                channel.type === ChannelType.GuildText ||
-                channel.type === ChannelType.GuildAnnouncement
+            const { totalDeleted, channelsProcessed } = await cleanRecentUserMessagesDeduplicated(
+                guild,
+                userId,
+                24 * 60 * 60 * 1000,
+                `Anti-spam message cleanup for ${userTag}`
             );
-
-            for (const channel of channelsToCheck.values()) {
-                if (!channel.permissionsFor(this.client.user).has(PermissionsBitField.Flags.ManageMessages)) {
-                    continue;
-                }
-
-                try {
-                    // Fetch messages from the spammer (up to 100 per channel)
-                    const messages = await channel.messages.fetch({ limit: 100 });
-                    const spammerMessages = messages.filter(msg => msg.author.id === userId && !msg.deleted);
-
-                    if (spammerMessages.size > 0) {
-                        // Delete in batches (Discord allows bulk delete of up to 100 messages)
-                        const messageArray = Array.from(spammerMessages.values());
-
-                        // Filter messages older than 14 days (Discord bulk delete limit)
-                        const twoWeeksAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
-                        const recentMessages = messageArray.filter(msg => msg.createdTimestamp > twoWeeksAgo);
-                        const oldMessages = messageArray.filter(msg => msg.createdTimestamp <= twoWeeksAgo);
-
-                        // Bulk delete recent messages
-                        if (recentMessages.length > 0) {
-                            // Discord bulk delete requires at least 2 messages
-                            if (recentMessages.length === 1) {
-                                try {
-                                    await recentMessages[0].delete();
-                                    totalDeleted++;
-                                } catch (err) {
-                                    this.debugConfig.log(`Could not delete single message in ${channel.name}`, 'antispam', null, err, 'warn');
-                                }
-                            } else {
-                                try {
-                                    await channel.bulkDelete(recentMessages, true);
-                                    totalDeleted += recentMessages.length;
-                                } catch (bulkError) {
-                                    // If bulk delete fails, try individual deletes
-                                    this.debugConfig.log(`Bulk delete failed in ${channel.name}, trying individual deletes`, 'antispam', null, bulkError, 'warn');
-                                    for (const msg of recentMessages) {
-                                        try {
-                                            await msg.delete();
-                                            totalDeleted++;
-                                        } catch (err) {
-                                            // Message might already be deleted or inaccessible
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Delete old messages individually
-                        for (const msg of oldMessages) {
-                            try {
-                                await msg.delete();
-                                totalDeleted++;
-                            } catch (err) {
-                                // Message might already be deleted or inaccessible
-                            }
-                        }
-                    }
-                } catch (channelError) {
-                    this.debugConfig.log(`Error cleaning messages in channel ${channel.name}`, 'antispam', { channelId: channel.id }, channelError, 'warn');
-                }
-            }
-
-            this.debugConfig.log(`Cleaned ${totalDeleted} messages from spammer ${userTag}`, 'antispam', { userId, totalDeleted }, null, 'success');
+            this.debugConfig.log(`Cleaned ${totalDeleted} messages across ${channelsProcessed} channels from spammer ${userTag}`, 'antispam', { userId, totalDeleted, channelsProcessed }, null, 'success');
         } catch (error) {
             this.debugConfig.log('Error cleaning spammer messages', 'antispam', { userId }, error, 'error');
         }
@@ -1657,48 +1632,23 @@ class PulchowkBot {
      * @private
      */
     async _assignLightBanRole(userOrMember, guild) {
-        const LIGHT_BAN_ROLE_ID = process.env.LIGHT_BAN_ROLE_ID || '1418234351493185657';
-
         try {
-            // Get member if we have a user object
             let member = userOrMember;
             if (userOrMember.user) {
                 member = await guild.members.fetch(userOrMember.id).catch(() => null);
-                if (!member) {
-                    this.debugConfig.log('Could not fetch member for light ban role', 'antispam', { userId: userOrMember.id }, null, 'warn');
-                    return;
-                }
             }
-
             if (!member || !member.roles) {
                 this.debugConfig.log('Invalid member for light ban role assignment', 'antispam', { userId: userOrMember.id }, null, 'warn');
                 return;
             }
 
-            const lightBanRole = guild.roles.cache.get(LIGHT_BAN_ROLE_ID);
-            if (!lightBanRole) {
-                this.debugConfig.log('Light ban role not found in guild', 'antispam', { roleId: LIGHT_BAN_ROLE_ID, guildId: guild.id }, null, 'warn');
-                return;
-            }
-
-            // Check if bot can manage this role
-            if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
-                this.debugConfig.log('Bot does not have permission to manage roles', 'antispam', { guildId: guild.id }, null, 'warn');
-                return;
-            }
-
-            // Check if role is higher than bot's highest role
-            if (lightBanRole.position >= guild.members.me.roles.highest.position) {
-                this.debugConfig.log('Light ban role is higher than bot\'s highest role', 'antispam', { roleId: LIGHT_BAN_ROLE_ID }, null, 'warn');
-                return;
-            }
-
-            // Assign the role if not already assigned
-            if (!member.roles.cache.has(LIGHT_BAN_ROLE_ID)) {
-                await member.roles.add(lightBanRole, 'Anti-spam: Spam detected - view-only access');
-                this.debugConfig.log(`Assigned light ban role to ${member.user.tag}`, 'antispam', { userId: member.id, roleId: LIGHT_BAN_ROLE_ID }, null, 'success');
+            const result = await assignServerBanRole(member, 'Anti-spam: Spam detected - view-only access');
+            if (result.success) {
+                this.debugConfig.log(`Assigned light ban role to ${member.user?.tag || member.id}`, 'antispam', { userId: member.id, roleId: LIGHT_BAN_ROLE_ID }, null, 'success');
+                // Purge messages sent in 24 hours across all channels
+                await cleanRecentUserMessagesDeduplicated(guild, member.id, 24 * 60 * 60 * 1000, 'Anti-spam: Server ban role assigned');
             } else {
-                this.debugConfig.log(`Light ban role already assigned to ${member.user.tag}`, 'antispam', { userId: member.id }, null, 'verbose');
+                this.debugConfig.log(`Failed assigning light ban role: ${result.error}`, 'antispam', { userId: member.id }, null, 'warn');
             }
         } catch (error) {
             this.debugConfig.log('Error assigning light ban role', 'antispam', { userId: userOrMember.id }, error, 'error');

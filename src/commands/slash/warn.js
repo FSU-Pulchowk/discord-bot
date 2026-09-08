@@ -1,4 +1,10 @@
 import { SlashCommandBuilder, EmbedBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import {
+    cleanUserMessagesAcrossGuild,
+    cleanRecentUserMessagesDeduplicated,
+    assignServerBanRole,
+    LIGHT_BAN_ROLE_ID
+} from '../../utils/moderationUtils.js';
 
 export const data = new SlashCommandBuilder()
     .setName('warn')
@@ -39,8 +45,8 @@ export async function execute(interaction) {
     if (targetUser.id === interaction.guild.ownerId && interaction.user.id !== interaction.guild.ownerId) {
         return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription("❌ Cannot moderate the server owner.")], ephemeral: true });
     }
-    if (!resetWarnings && !interaction.guild.members.me.permissions.has(PermissionsBitField.Flags.BanMembers)) {
-        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription("❌ I do not have sufficient permissions (e.g., 'Ban Members') to perform this action. Please grant me 'Ban Members' permission.")], ephemeral: true });
+    if (!resetWarnings && !interaction.guild.members.me.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription("❌ I do not have sufficient permissions ('Moderate Members') to perform timeouts. Please grant me 'Moderate Members' permission.")], ephemeral: true });
     }
     if (targetUser.roles.highest.position >= interaction.member.roles.highest.position && interaction.user.id !== interaction.guild.ownerId) {
         return interaction.reply({ embeds: [new EmbedBuilder().setColor('#FF0000').setDescription("❌ Cannot moderate a user with a role equal to or higher than your own.")], ephemeral: true });
@@ -223,28 +229,215 @@ async function processWarnAction(interaction, targetUser, reason, resetWarnings,
                     }
                 );
             });
-            const currentWarnCount = warnResult ? warnResult.warn_count : 0;
+            const currentWarnCount = warnResult ? warnResult.warn_count : 1;
+
             let replyMessage = '';
-            let embedColor = '#FFA500'; 
+            let embedColor = '#FFA500';
             let dmMessageToUser = '';
+            let actionsTaken = [];
+            let dmAlreadySent = false;
 
-            if (currentWarnCount > 5) {
-                try {
-                    await targetUser.ban({ reason: `Exceeded 5 warnings. Total warnings: ${currentWarnCount}. Last warn reason: ${reason}` });
-                    replyMessage = `**${targetUser.user.tag}** has been warned for the ${currentWarnCount} time and **banned** due to exceeding 5 warnings.`;
-                    embedColor = '#FF0000';
-                    dmMessageToUser = `You have been **banned** from **${interaction.guild.name}** because you accumulated ${currentWarnCount} warnings. Your last warning reason was: \`${reason}\`.`;
+            // Progressive Punishment Ladder based on warn count
+            if (currentWarnCount === 1) {
+                // --- WARN 1: 24h Timeout + Server-wide message cleanup + Anonymous DM ---
+                embedColor = '#FFA500';
 
-                } catch (banErr) {
-                    console.error(`Failed to ban ${targetUser.user.tag}:`, banErr);
-                    replyMessage = `**${targetUser.user.tag}** has been warned for the ${currentWarnCount} time. Failed to ban them: ${banErr.message}. Please check bot permissions and role hierarchy.`;
-                    embedColor = '#FFC107'; 
-                    dmMessageToUser = `You have been warned in **${interaction.guild.name}** for: \`${reason}\`. This is your warning number: \`${currentWarnCount}\`. You were supposed to be banned, but the bot encountered an error. Please contact a server admin.`;
+                // 1. Timeout for 24h
+                const timeoutDurationMs = 24 * 60 * 60 * 1000;
+                if (targetUser.moderatable) {
+                    try {
+                        await targetUser.timeout(timeoutDurationMs, `Warn 1: 24h timeout - ${reason}`);
+                        actionsTaken.push('⏳ Placed in 24-hour timeout');
+                    } catch (timeoutErr) {
+                        console.error('Failed to timeout user on Warn 1:', timeoutErr);
+                        actionsTaken.push(`⚠️ Failed to apply timeout: ${timeoutErr.message}`);
+                    }
+                } else {
+                    actionsTaken.push('⚠️ Could not apply timeout (role hierarchy or missing permissions)');
                 }
+
+                // 2. Delete all recent messages from all channels in server (past 24h)
+                try {
+                    const { totalDeleted, channelsProcessed } = await cleanUserMessagesAcrossGuild(
+                        interaction.guild,
+                        targetUser.id,
+                        timeoutDurationMs,
+                        { reason: `Warn 1: Purge recent messages - ${reason}` }
+                    );
+                    actionsTaken.push(`🧹 Purged ${totalDeleted} message(s) from past 24h across ${channelsProcessed} channel(s)`);
+                } catch (cleanErr) {
+                    console.error('Failed to clean messages on Warn 1:', cleanErr);
+                    actionsTaken.push('⚠️ Error during message purge');
+                }
+
+                // 3. Private DM (WITHOUT mentioning any moderator)
+                dmMessageToUser = `⚠️ **Warning #1 Received in ${interaction.guild.name}**\n\n` +
+                    `**Reason:** \`${reason}\`\n` +
+                    `**Punishment:** You have been placed in **timeout for 24 hours**, and your recent messages across all channels have been deleted.\n` +
+                    `**Reputation:** Reduced by ${repDeduction} points. Reputation lockout until <t:${Math.floor(lockoutUntil / 1000)}:R>.\n\n` +
+                    `*Please respect the server rules. A second warning will result in the Server Ban role (view-only access).*`;
+
+                replyMessage = `**${targetUser.user.tag}** has received **Warning #1**.\n` + actionsTaken.map(a => `• ${a}`).join('\n');
+
+            } else if (currentWarnCount === 2) {
+                // --- WARN 2: Server Ban Role + Server-wide message cleanup + Anonymous DM ---
+                embedColor = '#FF8C00';
+
+                // 1. Assign Server Ban Role
+                try {
+                    const roleResult = await assignServerBanRole(targetUser, `Warn 2: Server ban role - ${reason}`);
+                    if (roleResult.success) {
+                        actionsTaken.push('🔒 Assigned Server Ban role (view-only access)');
+                    } else {
+                        actionsTaken.push(`⚠️ Could not assign Server Ban role: ${roleResult.error}`);
+                    }
+                } catch (roleErr) {
+                    console.error('Failed to assign server ban role on Warn 2:', roleErr);
+                    actionsTaken.push(`⚠️ Error assigning Server Ban role: ${roleErr.message}`);
+                }
+
+                // 2. Delete all recent messages from all channels in server (past 24h)
+                try {
+                    const { totalDeleted, channelsProcessed } = await cleanRecentUserMessagesDeduplicated(
+                        interaction.guild,
+                        targetUser.id,
+                        24 * 60 * 60 * 1000,
+                        `Warn 2: Server ban role purge - ${reason}`
+                    );
+                    actionsTaken.push(`🧹 Purged ${totalDeleted} message(s) from past 24h across ${channelsProcessed} channel(s)`);
+                } catch (cleanErr) {
+                    console.error('Failed to clean messages on Warn 2:', cleanErr);
+                    actionsTaken.push('⚠️ Error during message purge');
+                }
+
+                // 3. Private DM (WITHOUT mentioning any moderator)
+                dmMessageToUser = `⚠️ **Warning #2 Received in ${interaction.guild.name}**\n\n` +
+                    `**Reason:** \`${reason}\`\n` +
+                    `**Punishment:** You have been given the **Server Ban role** (restricted view-only access), and your recent messages across all channels have been deleted.\n` +
+                    `**Reputation:** Reduced by ${repDeduction} points. Reputation lockout until <t:${Math.floor(lockoutUntil / 1000)}:R>.\n\n` +
+                    `*⚠️ Warning: Accumulating further warnings will result in extended timeouts, kicks, or a permanent ban.*`;
+
+                replyMessage = `**${targetUser.user.tag}** has received **Warning #2**.\n` + actionsTaken.map(a => `• ${a}`).join('\n');
+
+            } else if (currentWarnCount === 3) {
+                // --- WARN 3: 7-day timeout + Server Ban Role maintained + Anonymous DM ---
+                embedColor = '#FF4500';
+
+                // 1. Apply 7-day timeout
+                const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+                if (targetUser.moderatable) {
+                    try {
+                        await targetUser.timeout(sevenDaysMs, `Warn 3: 7-day timeout - ${reason}`);
+                        actionsTaken.push('⏳ Applied 7-day timeout');
+                    } catch (timeoutErr) {
+                        actionsTaken.push(`⚠️ Failed to apply 7-day timeout: ${timeoutErr.message}`);
+                    }
+                }
+
+                // 2. Maintain Server Ban Role
+                await assignServerBanRole(targetUser, `Warn 3: Maintain server ban role - ${reason}`);
+                actionsTaken.push('🔒 Maintained Server Ban role');
+
+                // 3. Purge past 24h messages
+                try {
+                    const { totalDeleted, channelsProcessed } = await cleanRecentUserMessagesDeduplicated(
+                        interaction.guild,
+                        targetUser.id,
+                        24 * 60 * 60 * 1000,
+                        `Warn 3 purge - ${reason}`
+                    );
+                    actionsTaken.push(`🧹 Purged ${totalDeleted} message(s) across ${channelsProcessed} channel(s)`);
+                } catch (_) {}
+
+                // 4. Private DM (WITHOUT mentioning any moderator)
+                dmMessageToUser = `🚨 **Warning #3 Received in ${interaction.guild.name}**\n\n` +
+                    `**Reason:** \`${reason}\`\n` +
+                    `**Punishment:** 7-day timeout with restricted server access.\n\n` +
+                    `*⚠️ FINAL WARNING: Receiving Warning #4 will result in an immediate KICK from the server.*`;
+
+                replyMessage = `**${targetUser.user.tag}** has received **Warning #3**.\n` + actionsTaken.map(a => `• ${a}`).join('\n');
+
+            } else if (currentWarnCount === 4) {
+                // --- WARN 4: Server Kick + Anonymous DM ---
+                embedColor = '#DC143C';
+
+                // Send DM before kick (WITHOUT mentioning any moderator)
+                dmMessageToUser = `🚨 **Warning #4 - Kicked from ${interaction.guild.name}**\n\n` +
+                    `**Reason:** \`${reason}\`\n` +
+                    `**Action:** You have been **kicked** from the server for accumulating 4 warnings.\n\n` +
+                    `*⚠️ Rejoining and receiving another warning will result in an irrevocable permanent BAN.*`;
+
+                await targetUser.send(dmMessageToUser).catch(() => null);
+                dmAlreadySent = true;
+
+                // Kick user
+                if (targetUser.kickable) {
+                    try {
+                        await targetUser.kick(`Exceeded warning threshold (4 warnings). Reason: ${reason}`);
+                        actionsTaken.push('🚪 Kicked from the server');
+                    } catch (kickErr) {
+                        console.error('Failed to kick user on Warn 4:', kickErr);
+                        actionsTaken.push(`⚠️ Failed to kick: ${kickErr.message}`);
+                    }
+                } else {
+                    actionsTaken.push('⚠️ Could not kick user (role hierarchy or lack of permission)');
+                }
+
+                replyMessage = `**${targetUser.user.tag}** has received **Warning #4** and has been **kicked** from the server.\n` + actionsTaken.map(a => `• ${a}`).join('\n');
+
             } else {
-                replyMessage = `**${targetUser.user.tag}** has been warned for the ${currentWarnCount} time.`;
-                dmMessageToUser = `You have been warned in **${interaction.guild.name}** for: \`${reason}\`. This is your warning number: \`${currentWarnCount}\`.\n\nYour reputation has been reduced by ${repDeduction} points. You will not be able to gain reputation until <t:${Math.floor(lockoutUntil / 1000)}:R>. Repeated warnings may lead to further moderation actions.`;
+                // --- WARN 5+: Permanent Server Ban + Anonymous DM ---
+                embedColor = '#FF0000';
+
+                // Send DM before ban (WITHOUT mentioning any moderator)
+                dmMessageToUser = `⛔ **Warning #${currentWarnCount} - Permanently Banned from ${interaction.guild.name}**\n\n` +
+                    `**Reason:** \`${reason}\`\n` +
+                    `**Action:** You have been **permanently banned** from the server for exceeding warning limits (${currentWarnCount} warnings).`;
+
+                await targetUser.send(dmMessageToUser).catch(() => null);
+                dmAlreadySent = true;
+
+                // Purge messages
+                try {
+                    await cleanRecentUserMessagesDeduplicated(
+                        interaction.guild,
+                        targetUser.id,
+                        24 * 60 * 60 * 1000,
+                        `Warn ${currentWarnCount} permanent ban purge`
+                    );
+                    actionsTaken.push('🧹 Purged recent messages from past 24h');
+                } catch (_) {}
+
+                // Ban user
+                if (targetUser.bannable) {
+                    try {
+                        await targetUser.ban({
+                            reason: `Exceeded warning limit (${currentWarnCount} warnings). Last reason: ${reason}`,
+                            deleteMessageSeconds: 86400
+                        });
+                        actionsTaken.push('🔨 Permanently banned from the server');
+                    } catch (banErr) {
+                        console.error(`Failed to ban ${targetUser.user.tag}:`, banErr);
+                        actionsTaken.push(`⚠️ Failed to ban: ${banErr.message}`);
+                    }
+                } else {
+                    actionsTaken.push('⚠️ Could not ban user (role hierarchy or lack of permission)');
+                }
+
+                replyMessage = `**${targetUser.user.tag}** has received **Warning #${currentWarnCount}** and has been **permanently banned**.\n` + actionsTaken.map(a => `• ${a}`).join('\n');
             }
+
+            // Log action to moderation_actions
+            await new Promise((resolve) => {
+                db.run(
+                    `INSERT INTO moderation_actions (action_type, moderator_id, target_user_id, guild_id, timestamp, reason) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [`warn_${currentWarnCount}`, moderatorId, targetUser.id, guildId, Date.now(), reason],
+                    (err) => {
+                        if (err) console.error('Error logging warn moderation action:', err.message);
+                        resolve();
+                    }
+                );
+            });
 
             const currentReputationRow = await new Promise((resolve, reject) => {
                 db.get(`SELECT reputation_points FROM reputation WHERE user_id = ? AND guild_id = ?`,
@@ -254,7 +447,6 @@ async function processWarnAction(interaction, targetUser, reason, resetWarnings,
                     });
             });
             const currentReputation = currentReputationRow ? currentReputationRow.reputation_points : 0;
-
 
             const embed = new EmbedBuilder()
                 .setColor(embedColor)
@@ -267,14 +459,17 @@ async function processWarnAction(interaction, targetUser, reason, resetWarnings,
                     { name: 'Current Reputation', value: currentReputation.toLocaleString(), inline: true }
                 )
                 .setTimestamp();
-            
+
             await interaction.editReply({ embeds: [embed], components: [] });
 
-            targetUser.send(dmMessageToUser)
-                .catch(dmErr => {
-                    console.warn(`Could not DM message to ${targetUser.user.tag}:`, dmErr.message);
-                    interaction.followUp({ content: `⚠️ Could not DM the user. They might have DMs disabled or I lack permissions.`, ephemeral: true }).catch(e => console.error("Error sending DM failure message:", e));
-                });
+            // Send DM if not already sent (e.g. for warn 1, 2, 3)
+            if (!dmAlreadySent && dmMessageToUser) {
+                targetUser.send(dmMessageToUser)
+                    .catch(dmErr => {
+                        console.warn(`Could not DM message to ${targetUser.user.tag}:`, dmErr.message);
+                        interaction.followUp({ content: `⚠️ Could not DM the user. They might have DMs disabled or I lack permissions.`, ephemeral: true }).catch(() => {});
+                    });
+            }
         }
     } catch (err) {
         console.error('Error during warn command:', err);
