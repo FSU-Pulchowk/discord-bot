@@ -110,27 +110,50 @@ export async function execute(interaction) {
         const now = Date.now();
         const threshold = now - durationMs;
         const twoWeeksAgo = now - (14 * 24 * 60 * 60 * 1000);
+        const maxCount = count || Infinity;
 
-        const messages = await targetChannel.messages.fetch({ limit: 100 });
-        let toDelete = messages.filter(msg =>
-            msg.createdTimestamp >= threshold &&
-            msg.deletable
-        );
+        // Paginate through the channel's history until we go past the duration threshold.
+        // Each round fetches up to 100 messages; we stop when any message is older than
+        // the threshold (messages are returned newest-first) or we have enough messages.
+        const messagesToDelete = [];
+        let lastMessageId = null;
+        let keepFetching = true;
+        const maxFetchRounds = 10; // up to 1000 messages per channel
+        let fetchRounds = 0;
 
-        if (targetUser) {
-            toDelete = toDelete.filter(msg => msg.author.id === targetUser.id);
+        while (keepFetching && fetchRounds < maxFetchRounds) {
+            fetchRounds++;
+            const fetchOptions = { limit: 100 };
+            if (lastMessageId) fetchOptions.before = lastMessageId;
+
+            const fetched = await targetChannel.messages.fetch(fetchOptions).catch(() => null);
+            if (!fetched || fetched.size === 0) break;
+
+            for (const msg of fetched.values()) {
+                // Messages are newest-first; once we hit one older than the threshold, stop.
+                if (msg.createdTimestamp < threshold) {
+                    keepFetching = false;
+                    break;
+                }
+                if (!msg.deletable) continue;
+                if (targetUser && msg.author.id !== targetUser.id) continue;
+
+                messagesToDelete.push(msg);
+                if (messagesToDelete.length >= maxCount) {
+                    keepFetching = false;
+                    break;
+                }
+            }
+
+            lastMessageId = fetched.last()?.id;
+            if (fetched.size < 100) break; // no more messages in channel
         }
 
-        if (count) {
-            toDelete = toDelete.first(count);
-        }
-
-        const messageArray = Array.from(toDelete.values());
         let deletedCount = 0;
+        const recentMsgs = messagesToDelete.filter(m => m.createdTimestamp > twoWeeksAgo);
+        const olderMsgs  = messagesToDelete.filter(m => m.createdTimestamp <= twoWeeksAgo);
 
-        const recentMsgs = messageArray.filter(m => m.createdTimestamp > twoWeeksAgo);
-        const olderMsgs = messageArray.filter(m => m.createdTimestamp <= twoWeeksAgo);
-
+        // Bulk-delete messages ≤14 days old (Discord API limit for bulkDelete)
         if (recentMsgs.length > 0) {
             if (recentMsgs.length === 1) {
                 try {
@@ -140,21 +163,28 @@ export async function execute(interaction) {
                     console.error('Failed to delete single message:', err);
                 }
             } else {
-                try {
-                    const deleted = await targetChannel.bulkDelete(recentMsgs, true);
-                    deletedCount += deleted.size;
-                } catch (bulkErr) {
-                    console.warn('Bulk delete failed, falling back to individual deletes:', bulkErr.message);
-                    for (const msg of recentMsgs) {
-                        try {
-                            await msg.delete();
+                // bulkDelete accepts at most 100 at a time
+                for (let i = 0; i < recentMsgs.length; i += 100) {
+                    const batch = recentMsgs.slice(i, i + 100);
+                    try {
+                        if (batch.length === 1) {
+                            await batch[0].delete();
                             deletedCount++;
-                        } catch (_) {}
+                        } else {
+                            const deleted = await targetChannel.bulkDelete(batch, true);
+                            deletedCount += deleted.size;
+                        }
+                    } catch (bulkErr) {
+                        console.warn('Bulk delete failed, falling back to individual deletes:', bulkErr.message);
+                        for (const msg of batch) {
+                            try { await msg.delete(); deletedCount++; } catch (_) {}
+                        }
                     }
                 }
             }
         }
 
+        // Messages older than 14 days must be deleted one-by-one
         if (olderMsgs.length > 0) {
             const oldDeletes = olderMsgs.map(msg =>
                 msg.delete().then(() => { deletedCount++; }).catch(() => null)
@@ -176,7 +206,7 @@ export async function execute(interaction) {
             embed.addFields({ name: '👤 Targeted User', value: `${targetUser}`, inline: true });
         }
         if (count) {
-            embed.addFields({ name: '🔢 Messages to Target', value: `${count}`, inline: true });
+            embed.addFields({ name: '🔢 Messages Limit', value: `${count}`, inline: true });
         }
 
         embed.setTimestamp();
