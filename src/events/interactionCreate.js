@@ -82,8 +82,9 @@ export async function handleInteraction(interaction) {
 
             try {
                 await command.execute(interaction);
+                // Hook: deliver eligible DM advertisement after command completion
                 if (interaction.commandName !== 'ad') {
-                    maybeDeliverAdDm(interaction).catch(() => {});
+                    maybeDeliverAdDm(interaction);
                 }
             } catch (error) {
                 await handleCommandError(interaction, error);

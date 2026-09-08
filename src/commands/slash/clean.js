@@ -21,15 +21,19 @@ export const data = new SlashCommandBuilder()
         .setMaxValue(100))
     .addUserOption(option =>
         option.setName('target_user')
-        .setDescription('Only delete messages from a specific user (cleans all channels if channel is not specified)')
+        .setDescription('Only delete messages from a specific user')
         .setRequired(false)) 
+    .addBooleanOption(option =>
+        option.setName('all_channels')
+        .setDescription('Clean across all channels in the server (defaults to false)')
+        .setRequired(false))
     .addStringOption(option =>
         option.setName('reason')
         .setDescription('Reason for message deletion')
         .setRequired(false))
     .addChannelOption(option =>
         option.setName('channel')
-        .setDescription('Channel to clean (omit to clean all channels when user is specified)')
+        .setDescription('Specific channel to clean (defaults to current channel)')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
         .setRequired(false)) 
     .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild);
@@ -66,6 +70,7 @@ export async function execute(interaction) {
     const targetUser = interaction.options.getUser('target_user');
     const reason = interaction.options.getString('reason') || 'No reason provided.';
     const explicitChannel = interaction.options.getChannel('channel');
+    const allChannels = interaction.options.getBoolean('all_channels') ?? false;
 
     const durationMs = parseDuration(durationInput);
     if (!durationMs || durationMs > 14 * 24 * 60 * 60 * 1000) {
@@ -76,8 +81,14 @@ export async function execute(interaction) {
     }
 
     try {
-        // Case 1: target_user is specified AND NO explicit channel is specified -> Purge from ALL channels in the server
-        if (targetUser && !explicitChannel) {
+        // Case 1: all_channels is explicitly true AND target_user is specified -> Server-wide user purge
+        if (allChannels) {
+            if (!targetUser) {
+                return await interaction.editReply({
+                    content: '❌ Server-wide clean requires specifying a `target_user` to prevent accidental bulk-deletion of the entire server.'
+                });
+            }
+
             const { totalDeleted, channelsProcessed } = await cleanUserMessagesAcrossGuild(
                 interaction.guild,
                 targetUser.id,
@@ -105,12 +116,20 @@ export async function execute(interaction) {
             return await interaction.editReply({ embeds: [embed] });
         }
 
-        // Case 2: Specific channel specified (with or without target_user), OR no user specified (current channel)
+        // Case 2: Target channel (explicitChannel || interaction.channel)
         const targetChannel = explicitChannel || interaction.channel;
         const now = Date.now();
         const threshold = now - durationMs;
         const twoWeeksAgo = now - (14 * 24 * 60 * 60 * 1000);
         const maxCount = count || Infinity;
+
+        // Check bot permissions in target channel
+        const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe().catch(() => null);
+        if (botMember && !targetChannel.permissionsFor(botMember)?.has(PermissionsBitField.Flags.ManageMessages)) {
+            return await interaction.editReply({
+                content: `❌ The bot lacks the **Manage Messages** permission in ${targetChannel}.`
+            });
+        }
 
         // Paginate through the channel's history until we go past the duration threshold.
         // Each round fetches up to 100 messages; we stop when any message is older than
@@ -147,6 +166,13 @@ export async function execute(interaction) {
 
             lastMessageId = fetched.last()?.id;
             if (fetched.size < 100) break; // no more messages in channel
+        }
+
+        if (messagesToDelete.length === 0) {
+            const userStr = targetUser ? ` from ${targetUser}` : '';
+            return await interaction.editReply({
+                content: `ℹ️ No messages found matching the duration (${durationInput})${userStr} in ${targetChannel}.`
+            });
         }
 
         let deletedCount = 0;

@@ -147,13 +147,14 @@ export async function deliverAdToUser(user, ad, guildId = null) {
  *
  * @param {import('discord.js').CommandInteraction} interaction
  */
-export function maybeDeliverAdDm(interaction) {
+export async function maybeDeliverAdDm(interaction) {
     if (!interaction.guild || !interaction.user || interaction.user.bot) return;
 
-    // Deliberately NOT awaited — runs in background without blocking the command
-    _doMaybeDeliverAdDm(interaction).catch(err => {
+    try {
+        await _doMaybeDeliverAdDm(interaction);
+    } catch (err) {
         console.error('[AdDelivery] Background DM delivery error:', err);
-    });
+    }
 }
 
 async function _doMaybeDeliverAdDm(interaction) {
